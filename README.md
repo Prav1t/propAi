@@ -2,7 +2,11 @@
 
 AI-native operations platform for property managers, strata/HOAs, facility teams, concierge desks and residents. The assistant, **[YOUR AI ASSISTANT NAME]**, acts through typed, permission-checked tools with approvals and a full audit trail (arriving in Iterations 6–8).
 
-> **Status: Iteration 1 of 13 — application foundation.** Authentication (with MFA), organizations, role-based access with property/building scoping, Postgres row-level-security tenant isolation, invitations, settings, audit log, demo data, Docker and CI. See [`docs/roadmap.md`](docs/roadmap.md).
+> **Status: Iteration 2 of 13 complete.**
+> - **Iteration 1 — foundation:** authentication with MFA, organizations, role-based access scoped to portfolio/property/building/unit, Postgres row-level-security tenant isolation, invitations, settings, audit log.
+> - **Iteration 2 — portfolio core:** portfolios, properties, buildings (stacking plan, bulk unit generation), floors, units, residents (move-in/out history, resident-app invites), staff directory, vendors (contacts, property approvals, vendor-portal invites), permission-aware full-text search and a Cmd/Ctrl-K command palette.
+>
+> See [`docs/roadmap.md`](docs/roadmap.md) and [`docs/iterations/`](docs/iterations/).
 
 ## Architecture in one paragraph
 
@@ -17,7 +21,8 @@ src/
     auth/              passwords (argon2id), sessions, TOTP MFA, rate limiting, crypto
     authz/             permission catalog, system roles, authorize()
     db/                Drizzle schema, pooled client, withContext() for RLS
-    modules/           organizations, members (+ future domains)
+    modules/           organizations, members, portfolio, people, vendors, search (+ future domains)
+                       scope.ts: SQL scope filters, search-query sanitizer, pagination
     mail/              Mailer (console | SMTP) + templates
     audit.ts           audit writer (same transaction as the change)
 drizzle/               SQL migrations (incl. RLS policies)
@@ -82,11 +87,13 @@ Password for every account: `DemoPass!2026`. These are created by `npm run db:se
 | `concierge@demo.test` | Concierge | Fraser Towers |
 | `council@demo.test` | Strata Council Member | Pacific Heights |
 | `resident@demo.test` | Resident | Own unit: Fraser Towers, Tower B #1204 |
-| `vendor@demo.test` | Vendor | Only work assigned to them (none until Iteration 3) |
+| `vendor@demo.test` | Vendor (linked to Blake Plumbing & Heating) | Only work assigned to their company (work orders arrive in Iteration 3) |
 | `admin@northshore.test` | Organization Admin (Northshore Strata) | Second tenant, used to prove isolation |
 | `superadmin@demo.test` | Platform super admin | `/admin` console |
 
-Demo org **Pacific Properties Management**: 4 properties (Harbour Centre, Pacific Heights, Fraser Towers, Kingsway Residences), 6 buildings, 339 units, ~565 residents. Data is deterministic.
+Demo org **Pacific Properties Management**: 4 properties (Harbour Centre, Pacific Heights, Fraser Towers, Kingsway Residences) in 2 portfolios, 6 buildings, 339 units, ~570 residents (incl. move-out history), 8 vendors with contacts and property approvals, staff profiles. Data is deterministic.
+
+Things to try: press **Ctrl/Cmd-K** and type a name or unit number; open Fraser Towers → Tower B for the stacking plan; sign in as `pm@demo.test` and notice Pacific Heights has disappeared everywhere; sign in as `resident@demo.test` to see the "My home" view.
 
 ## Tests
 

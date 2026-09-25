@@ -1,6 +1,6 @@
 import "server-only";
 import { unstable_rethrow } from "next/navigation";
-import type { ZodError } from "zod";
+import { ZodError } from "zod";
 import { ForbiddenError, NotFoundError } from "./authz/authorize";
 import { ConflictError, ValidationError } from "./modules/context";
 import { log } from "./log";
@@ -25,6 +25,7 @@ export function formValues(fd: FormData, keys: string[]): Record<string, string>
 // maps domain errors to friendly form state; rethrows redirects and unknown errors are logged
 export function toActionError(e: unknown, values?: Record<string, string>): ActionState {
   unstable_rethrow(e); // let redirect()/notFound() propagate
+  if (e instanceof ZodError) return { error: "Check the highlighted fields.", fieldErrors: zodFieldErrors(e), values };
   if (e instanceof ValidationError) return { error: e.message, fieldErrors: e.field ? { [e.field]: e.message } : undefined, values };
   if (e instanceof ForbiddenError || e instanceof ConflictError) return { error: e.message, values };
   if (e instanceof NotFoundError) return { error: "That item no longer exists.", values };

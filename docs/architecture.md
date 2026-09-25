@@ -83,6 +83,12 @@ Migrations and seeds run as the owner role (bypasses RLS as table owner). The ru
 - **Scope level** per role: `org` (org-wide), `scoped` (limited to membership scopes: portfolio/property/building), `occupant` (limited to the user's units), `assigned` (vendor: only records assigned to their vendor company, Iteration 3).
 - `authorize(principal, permission, resource)` checks: permission present → resource org matches → scope contains the resource's property/building → record-level rule (own / assigned) where applicable.
 - Platform super admin is a flag on `users`, used only by `/admin`. Org admins can never reach platform admin.
+- **List queries** apply `scopeCondition(principal, columns)` (in `src/server/modules/scope.ts`), which turns the principal's scope into a SQL predicate on `property_id` / `building_id` / `unit_id`. Resident lists use an `EXISTS` over current occupancies in scope.
+- **Record-level rules added in Iteration 2:** residents only see their own unit (and household names, not neighbours' contact details); scoped managers only see residents with a current occupancy in their scope; vendor users carry `vendorId` for assigned-work visibility; vendors are an org-wide directory with management limited to vendors serving the manager's properties.
+
+### Search
+
+Postgres full-text search over generated `tsvector` columns (config `simple`) with GIN indexes. User input goes through `toPrefixQuery()`, which strips all tsquery operators and builds a prefix `AND` query, so typed text can never inject query syntax. Global search runs one query per entity type the principal can read, each with the same scope predicate as the list pages. The Cmd/Ctrl-K palette calls it through a server action.
 
 ## 7. Security baseline
 

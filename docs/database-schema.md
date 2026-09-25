@@ -42,6 +42,21 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 | `residents` | organization | person record; `user_id` nullable (residents without logins) |
 | `unit_occupancies` | unit × resident | `relationship` resident/tenant/owner/occupant; `is_primary`; start/end dates |
 
+### People & vendors (🔒, Iteration 2)
+
+| Table | Purpose | Notes |
+|---|---|---|
+| `vendors` | Contractor / service company directory | name unique per org (case-insensitive); `categories text[]` (fixed trade list); `service_areas text[]`; status active/inactive/blocked; licence, insurance expiry, hourly rate, response SLA hours |
+| `vendor_contacts` | People at a vendor | one `is_primary` per vendor (enforced in service) |
+| `vendor_properties` | Properties a vendor is approved to work at | unique (vendor, property) |
+| `staff_profiles` | Directory details for a staff membership | unique per membership; phone, `skills text[]`, employment type |
+
+Also added in Iteration 2: `memberships.vendor_id` (links vendor users to their company → `Principal.vendorId`), `invitations.resident_id` / `invitations.vendor_id` (resident-app and vendor-portal invitations), `residents.notes`.
+
+### Full-text search
+
+Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits) and `vendors` (name, legal name, email, trades). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
+
 ### Indexes
 
 Every tenant table has an index leading with `org_id` (plus the parent key), matching how RLS + services filter. Lookups by token hash, email, and session id are unique indexes.
@@ -69,10 +84,9 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 2 | `vendors`, `vendor_contacts`, `vendor_properties`, `staff_profiles`, `parking_spaces`, `storage_lockers`, FTS `tsvector` columns |
 | 3 | `work_orders`, `work_order_events`, `sla_policies`, `tasks`, `task_checklist_items`, `inspection_templates`, `inspections`, `inspection_items`, `incidents`, `incident_events`, `complaints`, `outbox_events`, `notifications`, `notification_preferences` |
 | 4 | `amenities`, `amenity_rules`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, `document_versions`, `files` |
-| 5 | `visitors`, `visitor_passes`, `vehicles`, `parking_permits`, `parking_violations`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` |
+| 5 | `parking_spaces`, `storage_lockers`, `visitors`, `visitor_passes`, `vehicles`, `parking_permits`, `parking_violations`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` |
 | 6–7 | `ai_conversations`, `ai_messages`, `ai_action_logs`, `ai_approvals`, `ai_policies`, `ai_usage` |
 | 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |
 | 9 | `workflows`, `workflow_runs`, `reports`, `scheduled_jobs` |

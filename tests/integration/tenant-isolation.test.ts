@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appPool, asApp, orgIdBySlug, ownerPool, userIdByEmail } from "../support/db";
 
 // Proves Postgres RLS isolates tenants for the runtime role, independent of application code.
-const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs"];
+const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles"];
 
 let A: string; // Pacific Properties
 let B: string; // Northshore Strata

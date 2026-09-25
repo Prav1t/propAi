@@ -1,4 +1,4 @@
-import { inArray, isNull } from "drizzle-orm";
+import { eq, inArray, isNull } from "drizzle-orm";
 import { ownerDb } from "./lib";
 import * as s from "../src/server/db/schema";
 import { hashPassword } from "../src/server/auth/password";
@@ -146,25 +146,58 @@ async function main() {
             if (isDemoResident) residentUnitId = u.id;
           }
         }
+        // former residents of now-vacant units, so move-out history exists
+        for (const u of unitRows.filter((x) => x.status === "vacant" && x.type === "residential")) {
+          const first = pick(FIRST);
+          const last = pick(LAST);
+          const [res] = await tx.insert(s.residents).values({ orgId: pac.id, firstName: first, lastName: last, email: `${first}.${last}.${residentCount}@example.com`.toLowerCase() }).returning();
+          residentCount++;
+          await tx.insert(s.unitOccupancies).values({ orgId: pac.id, unitId: u.id, residentId: res.id, relationship: "tenant", isPrimary: true, startsOn: "2022-03-01", endsOn: "2026-06-30" });
+        }
       }
     }
     if (!residentUnitId) throw new Error("demo resident unit not created");
 
+    // vendors with contacts and property approvals
+    const VENDORS: { name: string; cats: string[]; props: string[]; phone: string; sla: number; rate: string; contact: string; areas: string[]; ins: string }[] = [
+      { name: "Blake Plumbing & Heating", cats: ["plumbing", "hvac"], props: ["HBC", "FRT", "KWR"], phone: "604-555-0142", sla: 4, rate: "115.00", contact: "Jordan Blake", areas: ["Vancouver", "Burnaby", "New Westminster"], ins: "2027-03-31" },
+      { name: "Coastline Electric", cats: ["electrical"], props: ["HBC", "PCH", "FRT", "KWR"], phone: "604-555-0177", sla: 8, rate: "125.00", contact: "Mei Wong", areas: ["Metro Vancouver"], ins: "2026-11-30" },
+      { name: "Summit Elevator Services", cats: ["elevator"], props: ["HBC", "FRT"], phone: "604-555-0199", sla: 2, rate: "180.00", contact: "Arjun Patel", areas: ["Metro Vancouver"], ins: "2027-01-15" },
+      { name: "Evergreen Landscaping", cats: ["landscaping", "snow_removal"], props: ["PCH", "KWR"], phone: "604-555-0120", sla: 48, rate: "65.00", contact: "Sara Kim", areas: ["Burnaby", "Vancouver"], ins: "2026-10-01" },
+      { name: "Pristine Commercial Cleaning", cats: ["cleaning"], props: ["HBC", "PCH", "FRT", "KWR"], phone: "604-555-0133", sla: 24, rate: "48.00", contact: "Ana Silva", areas: ["Metro Vancouver"], ins: "2027-06-30" },
+      { name: "Pacific Pest Control", cats: ["pest_control"], props: ["KWR", "PCH"], phone: "604-555-0188", sla: 24, rate: "95.00", contact: "Omar Ahmed", areas: ["Metro Vancouver"], ins: "2026-12-31" },
+      { name: "Firewise Safety Systems", cats: ["fire_safety", "security"], props: ["HBC", "PCH", "FRT", "KWR"], phone: "604-555-0111", sla: 4, rate: "140.00", contact: "Liam Fraser", areas: ["Metro Vancouver", "Fraser Valley"], ins: "2027-02-28" },
+      { name: "Northwest Roofing", cats: ["roofing"], props: [], phone: "604-555-0166", sla: 72, rate: "110.00", contact: "Grace Campbell", areas: ["Lower Mainland"], ins: "2026-09-30" },
+    ];
+    const vendorIds: Record<string, string> = {};
+    for (const v of VENDORS) {
+      const [row] = await tx.insert(s.vendors).values({
+        orgId: pac.id, name: v.name, legalName: `${v.name} Ltd.`, email: `dispatch@${v.name.toLowerCase().split(/[^a-z]+/)[0]}.example.com`,
+        phone: v.phone, categories: v.cats, serviceAreas: v.areas, slaResponseHours: v.sla, hourlyRate: v.rate, insuranceExpiresOn: v.ins,
+        licenseNumber: `BC-${Math.floor(100000 + rand() * 899999)}`, status: v.name === "Northwest Roofing" ? "inactive" : "active",
+      }).returning();
+      vendorIds[v.name] = row.id;
+      await tx.insert(s.vendorContacts).values({ orgId: pac.id, vendorId: row.id, name: v.contact, title: "Dispatch", phone: v.phone, email: `${v.contact.split(" ")[0].toLowerCase()}@example.com`, isPrimary: true });
+      for (const code of v.props) await tx.insert(s.vendorProperties).values({ orgId: pac.id, vendorId: row.id, propertyId: propIds[code] });
+    }
+
     // memberships with realistic scopes
-    const member = async (email: string, roleKey: string, title: string, scope?: { propertyId?: string; buildingId?: string; portfolioId?: string }[]) => {
-      const [m] = await tx.insert(s.memberships).values({ orgId: pac.id, userId: U(email).id, roleId: R(roleKey).id, title }).returning();
+    const member = async (email: string, roleKey: string, title: string, scope?: { propertyId?: string; buildingId?: string; portfolioId?: string }[], vendorId?: string) => {
+      const [m] = await tx.insert(s.memberships).values({ orgId: pac.id, userId: U(email).id, roleId: R(roleKey).id, title, vendorId }).returning();
       for (const sc of scope ?? []) await tx.insert(s.membershipScopes).values({ orgId: pac.id, membershipId: m.id, ...sc });
       await tx.insert(s.auditLogs).values({ orgId: pac.id, actorUserId: U(DEMO_USERS.admin.email).id, action: "member.added", entityType: "membership", entityId: m.id, after: { email, role: roleKey } });
       return m;
     };
-    await member(DEMO_USERS.admin.email, "org_admin", "Director of Operations");
-    await member(DEMO_USERS.pm.email, "property_manager", "Property Manager", [{ propertyId: propIds.HBC }, { propertyId: propIds.FRT }]);
-    await member(DEMO_USERS.concierge.email, "concierge", "Front Desk Concierge", [{ propertyId: propIds.FRT }]);
-    await member(DEMO_USERS.facility.email, "facility_manager", "Facility Manager", [{ portfolioId: pfMix.id }]);
-    await member(DEMO_USERS.staff.email, "maintenance_staff", "Building Technician", [{ buildingId: buildingIds["HBC-MAIN"] }]);
+    const profile = async (m: { id: string }, phone: string, skills: string[], employmentType = "full_time") =>
+      tx.insert(s.staffProfiles).values({ orgId: pac.id, membershipId: m.id, phone, skills, employmentType });
+    await profile(await member(DEMO_USERS.admin.email, "org_admin", "Director of Operations"), "604-555-0101", ["operations", "budgeting"]);
+    await profile(await member(DEMO_USERS.pm.email, "property_manager", "Property Manager", [{ propertyId: propIds.HBC }, { propertyId: propIds.FRT }]), "604-555-0102", ["tenant relations", "vendor management"]);
+    await profile(await member(DEMO_USERS.concierge.email, "concierge", "Front Desk Concierge", [{ propertyId: propIds.FRT }]), "604-555-0103", ["first aid", "french"], "part_time");
+    await profile(await member(DEMO_USERS.facility.email, "facility_manager", "Facility Manager", [{ portfolioId: pfMix.id }]), "604-555-0104", ["hvac", "preventive maintenance", "bms"]);
+    await profile(await member(DEMO_USERS.staff.email, "maintenance_staff", "Building Technician", [{ buildingId: buildingIds["HBC-MAIN"] }]), "604-555-0105", ["plumbing", "electrical", "painting"]);
     await member(DEMO_USERS.resident.email, "resident", "Resident, Tower B #1204");
-    await member(DEMO_USERS.vendor.email, "vendor", "Blake Plumbing & Heating");
-    await member(DEMO_USERS.council.email, "council_member", "Council President", [{ propertyId: propIds.PCH }]);
+    await member(DEMO_USERS.vendor.email, "vendor", "Owner", undefined, vendorIds["Blake Plumbing & Heating"]);
+    await profile(await member(DEMO_USERS.council.email, "council_member", "Council President", [{ propertyId: propIds.PCH }]), "604-555-0106", ["governance"], "on_call");
     await tx.insert(s.auditLogs).values({ orgId: pac.id, actorUserId: U(DEMO_USERS.admin.email).id, action: "org.created", entityType: "organization", entityId: pac.id, after: { name: pac.name, source: "seed" } });
 
     /* ── Northshore Strata (second tenant, used for isolation demos/tests) ── */
@@ -175,7 +208,14 @@ async function main() {
       const [fl] = await tx.insert(s.floors).values({ orgId: ns.id, buildingId: nsBld.id, level: f, name: `Level ${f}` }).returning();
       await tx.insert(s.units).values(Array.from({ length: 6 }, (_, i) => ({ orgId: ns.id, propertyId: nsProp.id, buildingId: nsBld.id, floorId: fl.id, number: `${f}0${i + 1}`, bedrooms: 1 + (i % 2), areaSqft: 700 + i * 40 })));
     }
-    await tx.insert(s.memberships).values({ orgId: ns.id, userId: U(DEMO_USERS.northshoreAdmin.email).id, roleId: R("org_admin").id, title: "Strata Council Treasurer" });
+    const [nsAdmin] = await tx.insert(s.memberships).values({ orgId: ns.id, userId: U(DEMO_USERS.northshoreAdmin.email).id, roleId: R("org_admin").id, title: "Strata Council Treasurer" }).returning();
+    await tx.insert(s.staffProfiles).values({ orgId: ns.id, membershipId: nsAdmin.id, phone: "604-555-0900", skills: ["finance"] });
+    const [nsVendor] = await tx.insert(s.vendors).values({ orgId: ns.id, name: "North Shore Plumbing", categories: ["plumbing"], phone: "604-555-0901" }).returning();
+    await tx.insert(s.vendorContacts).values({ orgId: ns.id, vendorId: nsVendor.id, name: "Kai Park", isPrimary: true });
+    await tx.insert(s.vendorProperties).values({ orgId: ns.id, vendorId: nsVendor.id, propertyId: nsProp.id });
+    const [nsRes] = await tx.insert(s.residents).values({ orgId: ns.id, firstName: "Tremblay", lastName: "Northshore", email: "tremblay.ns@example.com" }).returning();
+    const [nsUnit] = await tx.select().from(s.units).where(eq(s.units.propertyId, nsProp.id)).limit(1);
+    await tx.insert(s.unitOccupancies).values({ orgId: ns.id, unitId: nsUnit.id, residentId: nsRes.id, relationship: "owner", isPrimary: true });
     // the platform demo admin also sits on the Northshore council, to demo org switching
     const [adminNs] = await tx.insert(s.memberships).values({ orgId: ns.id, userId: U(DEMO_USERS.admin.email).id, roleId: R("council_member").id, title: "Council Member" }).returning();
     await tx.insert(s.membershipScopes).values({ orgId: ns.id, membershipId: adminNs.id, propertyId: nsProp.id });

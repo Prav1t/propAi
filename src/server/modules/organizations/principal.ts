@@ -88,7 +88,7 @@ export async function loadPrincipal(userId: string, orgSlug: string): Promise<(P
       permissions: new Set(m.role.permissions),
       portfolioIds, propertyIds, buildingIds, partialPropertyIds,
       unitIds, occupantBuildingIds, occupantPropertyIds, residentId,
-      vendorId: null,
+      vendorId: m.membership.vendorId ?? null,
     };
   });
 }

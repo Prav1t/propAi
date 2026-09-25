@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   check,
   index,
@@ -202,6 +203,7 @@ export const memberships = pgTable(
     roleId: uuid("role_id").notNull().references(() => roles.id),
     status: text("status").notNull().default("active"),
     title: text("title"),
+    vendorId: uuid("vendor_id").references((): AnyPgColumn => vendors.id, { onDelete: "set null" }), // vendor users only
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -322,6 +324,7 @@ export const residents = pgTable(
     lastName: text("last_name").notNull(),
     email: text("email"),
     phone: text("phone"),
+    notes: text("notes"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -379,6 +382,8 @@ export const invitations = pgTable(
     email: text("email").notNull(),
     roleId: uuid("role_id").notNull().references(() => roles.id),
     propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    residentId: uuid("resident_id").references((): AnyPgColumn => residents.id, { onDelete: "cascade" }), // resident app invite
+    vendorId: uuid("vendor_id").references((): AnyPgColumn => vendors.id, { onDelete: "cascade" }), // vendor user invite
     tokenHash: text("token_hash").notNull(),
     invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -413,6 +418,87 @@ export const auditLogs = pgTable(
   (t) => [
     index("audit_logs_org_created_idx").on(t.orgId, t.createdAt),
     index("audit_logs_entity_idx").on(t.orgId, t.entityType, t.entityId),
+  ],
+);
+
+export const vendors = pgTable(
+  "vendors",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    legalName: text("legal_name"),
+    email: text("email"),
+    phone: text("phone"),
+    website: text("website"),
+    categories: text("categories").array().notNull().default(sql`'{}'::text[]`),
+    serviceAreas: text("service_areas").array().notNull().default(sql`'{}'::text[]`),
+    status: text("status").notNull().default("active"),
+    licenseNumber: text("license_number"),
+    insuranceExpiresOn: date("insurance_expires_on"),
+    hourlyRate: numeric("hourly_rate", { precision: 10, scale: 2 }),
+    slaResponseHours: integer("sla_response_hours"),
+    notes: text("notes"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("vendors_org_idx").on(t.orgId, t.name),
+    uniqueIndex("vendors_org_name_uq").on(t.orgId, sql`lower(${t.name})`),
+    check("vendors_status_ck", sql`${t.status} in ('active','inactive','blocked')`),
+  ],
+);
+
+export const vendorContacts = pgTable(
+  "vendor_contacts",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    vendorId: uuid("vendor_id").notNull().references(() => vendors.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    title: text("title"),
+    email: text("email"),
+    phone: text("phone"),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [index("vendor_contacts_vendor_idx").on(t.orgId, t.vendorId)],
+);
+
+// which properties a vendor is approved to work at
+export const vendorProperties = pgTable(
+  "vendor_properties",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    vendorId: uuid("vendor_id").notNull().references(() => vendors.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("vendor_properties_uq").on(t.vendorId, t.propertyId),
+    index("vendor_properties_property_idx").on(t.orgId, t.propertyId),
+  ],
+);
+
+// staff directory details layered on a membership
+export const staffProfiles = pgTable(
+  "staff_profiles",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    phone: text("phone"),
+    skills: text("skills").array().notNull().default(sql`'{}'::text[]`),
+    employmentType: text("employment_type").notNull().default("full_time"),
+    notes: text("notes"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("staff_profiles_membership_uq").on(t.membershipId),
+    index("staff_profiles_org_idx").on(t.orgId),
+    check("staff_profiles_type_ck", sql`${t.employmentType} in ('full_time','part_time','contract','on_call')`),
   ],
 );
 

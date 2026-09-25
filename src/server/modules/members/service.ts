@@ -2,7 +2,7 @@ import "server-only";
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, setTxOrg, withContext, type Tx } from "../../db/client";
-import { invitations, membershipScopes, memberships, organizations, properties, roles, users } from "../../db/schema";
+import { invitations, membershipScopes, memberships, organizations, properties, residents, roles, users } from "../../db/schema";
 import { authorize, ForbiddenError, NotFoundError } from "../../authz/authorize";
 import { writeAudit } from "../../audit";
 import { generateToken, hashToken } from "../../auth/crypto";
@@ -170,7 +170,13 @@ async function consumeInvitation(token: string, userId: string, userEmail: strin
     if (org.status !== "active") throw new ForbiddenError("This organization is not active.");
     const [existing] = await tx.select().from(memberships).where(and(eq(memberships.orgId, inv.orgId), eq(memberships.userId, userId)));
     if (existing) throw new ConflictError("You're already a member of this organization.");
-    const [m] = await tx.insert(memberships).values({ orgId: inv.orgId, userId, roleId: inv.roleId }).returning();
+    // resident invites link the login to the resident record (which carries their unit occupancy)
+    if (inv.residentId) {
+      const linked = await tx.update(residents).set({ userId })
+        .where(and(eq(residents.id, inv.residentId), eq(residents.orgId, inv.orgId), isNull(residents.userId))).returning({ id: residents.id });
+      if (!linked.length) throw new ConflictError("This resident record is already linked to an account.");
+    }
+    const [m] = await tx.insert(memberships).values({ orgId: inv.orgId, userId, roleId: inv.roleId, vendorId: inv.vendorId }).returning();
     if (inv.propertyId) await tx.insert(membershipScopes).values({ orgId: inv.orgId, membershipId: m.id, propertyId: inv.propertyId });
     await writeAudit(tx, { orgId: inv.orgId, actorUserId: userId, action: "member.joined", entityType: "membership", entityId: m.id, after: { invitationId: inv.id, roleId: inv.roleId, propertyId: inv.propertyId } }, meta);
     return { orgSlug: org.slug };
