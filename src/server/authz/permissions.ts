@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   "workorder.read.assigned": { module: "maintenance", description: "View work orders assigned to me / my company" },
   "workorder.create": { module: "maintenance", description: "Submit work orders" },
   "workorder.manage": { module: "maintenance", description: "Triage, assign, update work orders" },
+  "workorder.configure": { module: "maintenance", description: "Configure SLA targets and triage rules" },
   "vendor.read": { module: "vendors", description: "View vendors" },
   "vendor.manage": { module: "vendors", description: "Manage vendors" },
   "task.read": { module: "tasks", description: "View tasks" },

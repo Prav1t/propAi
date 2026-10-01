@@ -6,7 +6,7 @@ import { Input, Select } from "./form";
 export type FilterDef = { name: string; label: string; options: { value: string; label: string }[]; allLabel?: string };
 
 // URL-driven filters: search is debounced, selects apply immediately, page resets on change
-export function FilterBar({ filters = [], searchPlaceholder = "Search…" }: { filters?: FilterDef[]; searchPlaceholder?: string }) {
+export function FilterBar({ filters = [], searchPlaceholder = "Search…", search = true }: { filters?: FilterDef[]; searchPlaceholder?: string; search?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -25,7 +25,7 @@ export function FilterBar({ filters = [], searchPlaceholder = "Search…" }: { f
 
   return (
     <div role="search" className="flex flex-wrap items-center gap-2 border-b border-border p-3" aria-busy={pending}>
-      <label className="sr-only" htmlFor="filter-q">Search</label>
+      {search ? <><label className="sr-only" htmlFor="filter-q">Search</label>
       <Input
         id="filter-q" type="search" value={q} placeholder={searchPlaceholder} className="h-8 w-full sm:w-64"
         onChange={(e) => {
@@ -34,7 +34,7 @@ export function FilterBar({ filters = [], searchPlaceholder = "Search…" }: { f
           const v = e.target.value;
           timer.current = setTimeout(() => apply("q", v.trim()), 250);
         }}
-      />
+      /></> : null}
       {filters.map((f) => (
         <div key={f.name}>
           <label className="sr-only" htmlFor={`filter-${f.name}`}>{f.label}</label>

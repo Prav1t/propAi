@@ -2,6 +2,7 @@ import { eq, inArray, isNull } from "drizzle-orm";
 import { ownerDb } from "./lib";
 import * as s from "../src/server/db/schema";
 import { hashPassword } from "../src/server/auth/password";
+import { seedOps } from "./seed-ops";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -220,6 +221,26 @@ async function main() {
     const [adminNs] = await tx.insert(s.memberships).values({ orgId: ns.id, userId: U(DEMO_USERS.admin.email).id, roleId: R("council_member").id, title: "Council Member" }).returning();
     await tx.insert(s.membershipScopes).values({ orgId: ns.id, membershipId: adminNs.id, propertyId: nsProp.id });
 
+    // a little operations data in the second tenant so isolation tests cover every ops table
+    const nsUser = U(DEMO_USERS.northshoreAdmin.email).id;
+    const [nsWo] = await tx.insert(s.workOrders).values({ orgId: ns.id, number: 1, propertyId: nsProp.id, buildingId: nsBld.id, unitId: nsUnit.id, category: "plumbing", priority: "normal", title: "Dripping tap in 101", status: "assigned", vendorId: nsVendor.id, submittedByUserId: nsUser, source: "staff" }).returning();
+    await tx.insert(s.timelineEvents).values({ orgId: ns.id, entityType: "work_order", entityId: nsWo.id, kind: "created", visibility: "public", actorUserId: nsUser, body: "Request #1 submitted." });
+    await tx.insert(s.slaPolicies).values({ orgId: ns.id, priority: "urgent", respondMinutes: 30, resolveMinutes: 720 });
+    await tx.insert(s.triageRules).values({ orgId: ns.id, name: "Leaks", keywords: ["leak"], setPriority: "high" });
+    const [nsTask] = await tx.insert(s.tasks).values({ orgId: ns.id, propertyId: nsProp.id, title: "Renew strata insurance", createdByUserId: nsUser, assignedMembershipId: nsAdmin.id }).returning();
+    await tx.insert(s.taskChecklistItems).values({ orgId: ns.id, taskId: nsTask.id, label: "Collect quotes" });
+    const [nsTpl] = await tx.insert(s.inspectionTemplates).values({ orgId: ns.id, name: "Annual walk-through", kind: "property", items: [{ section: "General", label: "Roof drains clear" }] }).returning();
+    const [nsInsp] = await tx.insert(s.inspections).values({ orgId: ns.id, templateId: nsTpl.id, propertyId: nsProp.id, buildingId: nsBld.id, kind: "property", title: "Annual walk-through", scheduledFor: "2026-11-15" }).returning();
+    await tx.insert(s.inspectionItems).values({ orgId: ns.id, inspectionId: nsInsp.id, section: "General", label: "Roof drains clear" });
+    await tx.insert(s.incidents).values({ orgId: ns.id, number: 1, propertyId: nsProp.id, buildingId: nsBld.id, type: "security", severity: "low", title: "Lobby door left propped open", occurredAt: new Date(), reportedByUserId: nsUser });
+    await tx.insert(s.complaints).values({ orgId: ns.id, number: 1, propertyId: nsProp.id, buildingId: nsBld.id, unitId: nsUnit.id, category: "noise", subject: "Barking dog", description: "Dog barks most afternoons." });
+    await tx.insert(s.orgCounters).values([{ orgId: ns.id, key: "work_order", value: 1 }, { orgId: ns.id, key: "incident", value: 1 }, { orgId: ns.id, key: "complaint", value: 1 }]);
+    await tx.insert(s.notifications).values({ orgId: ns.id, userId: nsUser, kind: "workorder.created", title: "New request #1", href: `/o/northshore-strata/maintenance/${nsWo.id}`, entityType: "work_order", entityId: nsWo.id });
+    await tx.insert(s.notificationPreferences).values({ orgId: ns.id, userId: nsUser, kind: "task.assigned", email: true, inApp: true });
+    await tx.insert(s.outboxEvents).values({ orgId: ns.id, type: "workorder.created", payload: { workOrderId: nsWo.id }, processedAt: new Date() });
+
+    const ops = await seedOps(tx, pac.id);
+    console.log(`✓ operations: ${ops.workOrders} work orders, ${ops.tasks} tasks, ${ops.inspections} inspections, ${ops.incidents} incidents, ${ops.complaints} complaints`);
     console.log(`✓ seeded 2 orgs, ${Object.keys(propIds).length + 1} properties, ${unitCount + 30} units, ${residentCount} residents, ${userRows.length} demo users`);
   });
   await pool.end();

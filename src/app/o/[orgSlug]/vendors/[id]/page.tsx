@@ -95,7 +95,7 @@ export default async function VendorPage({ params }: PageProps<"/o/[orgSlug]/ven
             ) : null}
           </Panel>
           <Panel>
-            <PanelHeader title="Vendor portal users" description="See only work assigned to this company (work orders arrive next iteration)." />
+            <PanelHeader title="Vendor portal users" description="They see only work orders assigned to this company." />
             {d.appUsers.length === 0 && d.pendingInvites.length === 0 ? <EmptyState title="No users yet" /> : (
               <ul className="divide-y divide-border">
                 {d.appUsers.map((u) => <li key={u.membershipId} className="px-4 py-2 text-sm">{u.name} <span className="text-xs text-faint">{u.email}</span> {u.status !== "active" ? <Badge>Deactivated</Badge> : null}</li>)}

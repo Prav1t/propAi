@@ -506,3 +506,398 @@ export type User = typeof users.$inferSelect;
 export type Organization = typeof organizations.$inferSelect;
 export type Role = typeof roles.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
+
+/* ───────────────────────── Operations (Iteration 3, RLS) ───────────────────────── */
+
+const ts = (name: string) => timestamp(name, { withTimezone: true });
+
+// per-org human-friendly sequences (WO-1024, INC-12, CMP-7)
+export const orgCounters = pgTable(
+  "org_counters",
+  {
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    value: integer("value").notNull().default(0),
+  },
+  (t) => [uniqueIndex("org_counters_pk").on(t.orgId, t.key)],
+);
+
+export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+
+// response/resolution targets per priority; property_id null = org default
+export const slaPolicies = pgTable(
+  "sla_policies",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    priority: text("priority").notNull(),
+    respondMinutes: integer("respond_minutes").notNull(),
+    resolveMinutes: integer("resolve_minutes").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("sla_policies_scope_uq").on(t.orgId, sql`coalesce(${t.propertyId}, '00000000-0000-0000-0000-000000000000'::uuid)`, t.priority),
+    check("sla_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
+    check("sla_minutes_ck", sql`${t.respondMinutes} > 0 and ${t.resolveMinutes} >= ${t.respondMinutes}`),
+  ],
+);
+
+// configurable triage: keyword/category match → priority, emergency flag, default assignee, resident instructions
+export const triageRules = pgTable(
+  "triage_rules",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    keywords: text("keywords").array().notNull().default(sql`'{}'::text[]`),
+    category: text("category"),
+    setPriority: text("set_priority"),
+    setEmergency: boolean("set_emergency").notNull().default(false),
+    setCategory: text("set_category"),
+    assignMembershipId: uuid("assign_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    assignVendorId: uuid("assign_vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    residentInstructions: text("resident_instructions"),
+    position: integer("position").notNull().default(100),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [index("triage_rules_org_idx").on(t.orgId, t.position)],
+);
+
+export const workOrders = pgTable(
+  "work_orders",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    area: text("area"),
+    category: text("category").notNull(),
+    priority: text("priority").notNull().default("normal"),
+    isEmergency: boolean("is_emergency").notNull().default(false),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    status: text("status").notNull().default("new"),
+    source: text("source").notNull().default("staff"),
+    submittedByUserId: uuid("submitted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    assignedMembershipId: uuid("assigned_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    vendorId: uuid("vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    permissionToEnter: boolean("permission_to_enter").notNull().default(false),
+    entryNotes: text("entry_notes"),
+    scheduledStart: ts("scheduled_start"),
+    scheduledEnd: ts("scheduled_end"),
+    respondDueAt: ts("respond_due_at"),
+    resolveDueAt: ts("resolve_due_at"),
+    firstResponseAt: ts("first_response_at"),
+    completedAt: ts("completed_at"),
+    closedAt: ts("closed_at"),
+    cancelledAt: ts("cancelled_at"),
+    slaBreachedAt: ts("sla_breached_at"),
+    cost: numeric("cost", { precision: 12, scale: 2 }),
+    resolutionNotes: text("resolution_notes"),
+    triageRuleId: uuid("triage_rule_id").references(() => triageRules.id, { onDelete: "set null" }),
+    sourceType: text("source_type"), // inspection | incident | complaint
+    sourceId: uuid("source_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("work_orders_org_number_uq").on(t.orgId, t.number),
+    index("work_orders_org_status_idx").on(t.orgId, t.status),
+    index("work_orders_property_idx").on(t.orgId, t.propertyId, t.createdAt),
+    index("work_orders_vendor_idx").on(t.vendorId),
+    index("work_orders_assignee_idx").on(t.assignedMembershipId),
+    index("work_orders_submitter_idx").on(t.submittedByUserId),
+    index("work_orders_unit_idx").on(t.unitId),
+    check("wo_status_ck", sql`${t.status} in ('new','acknowledged','assigned','scheduled','in_progress','awaiting_vendor','awaiting_resident','completed','closed','cancelled')`),
+    check("wo_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
+    check("wo_source_ck", sql`${t.source} in ('resident','staff','inspection','incident','complaint','system')`),
+    check("wo_cost_ck", sql`${t.cost} is null or ${t.cost} >= 0`),
+  ],
+);
+
+// shared activity timeline for work orders, tasks, incidents, complaints and inspections
+export const timelineEvents = pgTable(
+  "timeline_events",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(), // created | status | assigned | comment | scheduled | attachment | escalated | rule
+    fromStatus: text("from_status"),
+    toStatus: text("to_status"),
+    body: text("body"),
+    visibility: text("visibility").notNull().default("internal"), // public | vendor | internal
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("timeline_entity_idx").on(t.orgId, t.entityType, t.entityId, t.createdAt),
+    check("timeline_visibility_ck", sql`${t.visibility} in ('public','vendor','internal')`),
+  ],
+);
+
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    status: text("status").notNull().default("open"),
+    priority: text("priority").notNull().default("normal"),
+    dueAt: ts("due_at"),
+    assignedMembershipId: uuid("assigned_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    source: text("source").notNull().default("manual"),
+    sourceType: text("source_type"),
+    sourceId: uuid("source_id"),
+    recurrence: text("recurrence").notNull().default("none"),
+    blockedByTaskId: uuid("blocked_by_task_id").references((): AnyPgColumn => tasks.id, { onDelete: "set null" }),
+    completedAt: ts("completed_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("tasks_org_status_idx").on(t.orgId, t.status, t.dueAt),
+    index("tasks_assignee_idx").on(t.assignedMembershipId),
+    check("tasks_status_ck", sql`${t.status} in ('open','in_progress','blocked','done','cancelled')`),
+    check("tasks_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
+    check("tasks_recurrence_ck", sql`${t.recurrence} in ('none','daily','weekly','monthly')`),
+    check("tasks_source_ck", sql`${t.source} in ('manual','work_order','inspection','incident','complaint','recurring','system')`),
+  ],
+);
+
+export const taskChecklistItems = pgTable(
+  "task_checklist_items",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    done: boolean("done").notNull().default(false),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [index("task_checklist_task_idx").on(t.taskId, t.position)],
+);
+
+export const INSPECTION_KINDS = ["unit", "property", "equipment", "safety", "move_in", "move_out", "amenity"] as const;
+
+export const inspectionTemplates = pgTable(
+  "inspection_templates",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    items: jsonb("items").$type<{ section: string; label: string }[]>().notNull().default([]),
+    repeatEveryDays: integer("repeat_every_days"),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [index("inspection_templates_org_idx").on(t.orgId)],
+);
+
+export const inspections = pgTable(
+  "inspections",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    templateId: uuid("template_id").references(() => inspectionTemplates.id, { onDelete: "set null" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    scheduledFor: date("scheduled_for").notNull(),
+    status: text("status").notNull().default("scheduled"),
+    inspectorMembershipId: uuid("inspector_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    result: text("result"), // pass | fail
+    summary: text("summary"),
+    signedByName: text("signed_by_name"),
+    completedAt: ts("completed_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("inspections_org_idx").on(t.orgId, t.status, t.scheduledFor),
+    check("inspections_status_ck", sql`${t.status} in ('scheduled','in_progress','completed','cancelled')`),
+    check("inspections_result_ck", sql`${t.result} is null or ${t.result} in ('pass','fail')`),
+  ],
+);
+
+export const inspectionItems = pgTable(
+  "inspection_items",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    inspectionId: uuid("inspection_id").notNull().references(() => inspections.id, { onDelete: "cascade" }),
+    section: text("section").notNull().default("General"),
+    label: text("label").notNull(),
+    position: integer("position").notNull().default(0),
+    result: text("result"),
+    severity: text("severity"),
+    notes: text("notes"),
+    workOrderId: uuid("work_order_id").references(() => workOrders.id, { onDelete: "set null" }),
+  },
+  (t) => [
+    index("inspection_items_insp_idx").on(t.inspectionId, t.position),
+    check("inspection_items_result_ck", sql`${t.result} is null or ${t.result} in ('pass','fail','na')`),
+    check("inspection_items_sev_ck", sql`${t.severity} is null or ${t.severity} in ('low','medium','high','critical')`),
+  ],
+);
+
+export const INCIDENT_TYPES = ["security", "water_damage", "fire", "equipment_failure", "resident", "injury", "property_damage", "unauthorized_access", "other"] as const;
+
+export const incidents = pgTable(
+  "incidents",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    type: text("type").notNull(),
+    severity: text("severity").notNull().default("medium"),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    location: text("location"),
+    occurredAt: ts("occurred_at").notNull(),
+    status: text("status").notNull().default("open"),
+    reportedByUserId: uuid("reported_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    peopleInvolved: text("people_involved"),
+    externalReference: text("external_reference"),
+    resolution: text("resolution"),
+    resolvedAt: ts("resolved_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("incidents_org_number_uq").on(t.orgId, t.number),
+    index("incidents_org_idx").on(t.orgId, t.status, t.occurredAt),
+    check("incidents_status_ck", sql`${t.status} in ('open','investigating','resolved','closed')`),
+    check("incidents_severity_ck", sql`${t.severity} in ('low','medium','high','critical')`),
+  ],
+);
+
+export const COMPLAINT_CATEGORIES = ["noise", "parking", "pets", "smoking", "cleanliness", "neighbour", "amenity", "staff", "maintenance", "other"] as const;
+
+export const complaints = pgTable(
+  "complaints",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    category: text("category").notNull(),
+    priority: text("priority").notNull().default("normal"),
+    subject: text("subject").notNull(),
+    description: text("description").notNull().default(""),
+    status: text("status").notNull().default("new"),
+    submittedByUserId: uuid("submitted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    assignedMembershipId: uuid("assigned_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    relatedIncidentId: uuid("related_incident_id").references(() => incidents.id, { onDelete: "set null" }),
+    resolution: text("resolution"),
+    resolvedAt: ts("resolved_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("complaints_org_number_uq").on(t.orgId, t.number),
+    index("complaints_org_idx").on(t.orgId, t.status, t.createdAt),
+    check("complaints_status_ck", sql`${t.status} in ('new','acknowledged','investigating','resolved','closed','dismissed')`),
+    check("complaints_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
+  ],
+);
+
+// uploaded files; access always goes through the parent entity's permission check
+export const files = pgTable(
+  "files",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    storageKey: text("storage_key").notNull(),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    visibility: text("visibility").notNull().default("internal"),
+    scanStatus: text("scan_status").notNull().default("unscanned"),
+    uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("files_entity_idx").on(t.orgId, t.entityType, t.entityId),
+    uniqueIndex("files_storage_key_uq").on(t.storageKey),
+    check("files_visibility_ck", sql`${t.visibility} in ('public','vendor','internal')`),
+    check("files_scan_ck", sql`${t.scanStatus} in ('unscanned','clean','infected','error')`),
+  ],
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    href: text("href"),
+    entityType: text("entity_type"),
+    entityId: uuid("entity_id"),
+    eventId: uuid("event_id"),
+    readAt: ts("read_at"),
+    emailedAt: ts("emailed_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("notifications_user_idx").on(t.orgId, t.userId, t.createdAt),
+    uniqueIndex("notifications_event_user_uq").on(t.eventId, t.userId), // idempotent delivery
+  ],
+);
+
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    email: boolean("email").notNull(),
+    inApp: boolean("in_app").notNull().default(true),
+  },
+  (t) => [uniqueIndex("notification_prefs_uq").on(t.orgId, t.userId, t.kind)],
+);
+
+// transactional outbox: domain events written with the change, delivered by the worker
+export const outboxEvents = pgTable(
+  "outbox_events",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    payload: jsonb("payload").notNull(),
+    actorUserId: uuid("actor_user_id"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    processedAt: ts("processed_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("outbox_pending_idx").on(t.createdAt).where(sql`${t.processedAt} is null`)],
+);

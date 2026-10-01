@@ -6,6 +6,7 @@ export type Principal = {
   userId: string;
   orgId: string;
   orgSlug: string;
+  orgTimezone?: string;
   membershipId: string;
   role: { id: string; key: string; name: string; scopeLevel: ScopeLevel; category: RoleCategory };
   permissions: ReadonlySet<string>;

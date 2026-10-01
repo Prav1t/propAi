@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iteration 1)
+## Implemented (Iterations 1–3)
 
 ### Identity & auth (🌐)
 
@@ -53,6 +53,25 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 Also added in Iteration 2: `memberships.vendor_id` (links vendor users to their company → `Principal.vendorId`), `invitations.resident_id` / `invitations.vendor_id` (resident-app and vendor-portal invitations), `residents.notes`.
 
+### Operations (🔒, Iteration 3)
+
+| Table | Purpose / key columns |
+|---|---|
+| `org_counters` | per-org sequences (`work_order`, `incident`, `complaint`) for human-friendly numbers; upserted with `ON CONFLICT … RETURNING` |
+| `sla_policies` | respond/resolve minutes per priority; `property_id` null = org default; unique per (org, property, priority) |
+| `triage_rules` | keywords and/or category → priority, emergency flag, category, default assignee/vendor, resident instructions; `position` orders evaluation; property rules beat org rules |
+| `work_orders` | `number` (unique per org), property/building/unit/area, category, priority, `is_emergency`, `status` (10-state machine), source (`resident`/`staff`/`inspection`…), submitter/resident, assigned membership, vendor, `respond_due_at`/`resolve_due_at`, `first_response_at`, `sla_breached_at`, scheduled window, completed/closed/cancelled timestamps, cost, resolution notes, permission to enter + entry notes, `triage_rule_id`, `source_type`/`source_id` |
+| `timeline_events` | shared activity log for work orders, tasks, inspections, incidents, complaints: kind, from/to status, body, `visibility` (`public`/`vendor`/`internal`), actor |
+| `tasks`, `task_checklist_items` | title, property/building, priority, due, assignee, status (`open`/`in_progress`/`blocked`/`done`/`cancelled`), recurrence (`daily`/`weekly`/`monthly`), `blocked_by_task_id`, source link |
+| `inspection_templates` | name, kind, checklist `items` (jsonb `[{section,label}]`), `repeat_every_days`, active |
+| `inspections`, `inspection_items` | scheduled date, inspector, status, result, summary, signature name; items with result (`pass`/`fail`/`na`), severity, notes, linked follow-up `work_order_id` |
+| `incidents` | number, type, severity, status, location, occurred_at, reporter, people involved (staff-only), external reference, resolution |
+| `complaints` | number, category, subject, description, unit, submitter/resident, assignee, priority, status, related incident, resolution |
+| `files` | owner (`entity_type`, `entity_id`), storage key, sniffed content type, size, sha256, visibility, scan status, uploader |
+| `notifications` | user, kind, title, body, link, entity, `event_id` (unique with user → idempotent delivery), read/emailed timestamps |
+| `notification_preferences` | per user × kind: in-app, email |
+| `outbox_events` | type, payload, actor, attempts, last error, processed_at (partial index on unprocessed rows) |
+
 ### Full-text search
 
 Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits) and `vendors` (name, legal name, email, trades). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
@@ -69,6 +88,7 @@ Helper functions read transaction-local settings set by `withContext()`:
 app_org()            -- current_setting('app.org_id')
 app_user()           -- current_setting('app.user_id')
 app_platform_admin() -- current_setting('app.platform_admin') = 'on'
+app_system()         -- current_setting('app.system') = 'on'   (background worker only, Iteration 3)
 ```
 
 | Policy | Rule |
@@ -78,14 +98,18 @@ app_platform_admin() -- current_setting('app.platform_admin') = 'on'
 | `invitations` | org context, or (no org context) the single row matching `app.invite_token_hash` |
 | `audit_logs` | read: org context (or own personal rows with no org); insert: org context or own personal rows; no update/delete grants |
 
+| Operations tables (`work_orders`, `tasks`, `incidents`, `complaints`, `files`, …) | read: `org_id = app_org()` (or platform admin / worker system context); write: `org_id = app_org()` only |
+| `notifications` | read/update: own rows in the current org (worker: any user in the org it names); insert: own user, or the worker |
+| `notification_preferences` | own rows only |
+| `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
+
 Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 testing: inside org A, a user could see their own membership in org B. Covered by a regression test in `tests/integration/tenant-isolation.test.ts`.
 
 ## Planned tables
 
 | Iteration | Tables |
 |---|---|
-| 3 | `work_orders`, `work_order_events`, `sla_policies`, `tasks`, `task_checklist_items`, `inspection_templates`, `inspections`, `inspection_items`, `incidents`, `incident_events`, `complaints`, `outbox_events`, `notifications`, `notification_preferences` |
-| 4 | `amenities`, `amenity_rules`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, `document_versions`, `files` |
+| 4 | `amenities`, `amenity_rules`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, `document_versions` (files reuse the Iteration 3 `files` table) |
 | 5 | `parking_spaces`, `storage_lockers`, `visitors`, `visitor_passes`, `vehicles`, `parking_permits`, `parking_violations`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` |
 | 6–7 | `ai_conversations`, `ai_messages`, `ai_action_logs`, `ai_approvals`, `ai_policies`, `ai_usage` |
 | 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |

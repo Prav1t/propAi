@@ -29,6 +29,10 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   serverExternalPackages: ["@node-rs/argon2", "pg"],
+  experimental: {
+    // photo/video uploads on requests, incidents and inspections (per-file limits enforced server-side)
+    serverActions: { bodySizeLimit: "30mb" },
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

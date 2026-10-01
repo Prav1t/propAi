@@ -7,6 +7,16 @@ export type NavSection = { title?: string; items: NavItem[] };
 export const NAV: NavSection[] = [
   { items: [{ label: "Dashboard", href: (s) => `/o/${s}/dashboard`, icon: "home" }] },
   {
+    title: "Operations",
+    items: [
+      { label: "Maintenance", href: (s) => `/o/${s}/maintenance`, anyOf: ["workorder.read", "workorder.read.assigned", "workorder.read.own", "workorder.create"], icon: "wrench" },
+      { label: "Tasks", href: (s) => `/o/${s}/tasks`, anyOf: ["task.read", "task.manage"], icon: "check" },
+      { label: "Inspections", href: (s) => `/o/${s}/inspections`, anyOf: ["inspection.read", "inspection.manage"], icon: "clipboard" },
+      { label: "Incidents", href: (s) => `/o/${s}/incidents`, anyOf: ["incident.read", "incident.create"], icon: "alert" },
+      { label: "Complaints", href: (s) => `/o/${s}/complaints`, anyOf: ["complaint.read", "complaint.create", "complaint.manage"], icon: "message" },
+    ],
+  },
+  {
     title: "Portfolio",
     items: [
       { label: "Properties", href: (s) => `/o/${s}/properties`, anyOf: ["property.read"], icon: "building" },
@@ -27,6 +37,7 @@ export const NAV: NavSection[] = [
     items: [
       { label: "General", href: (s) => `/o/${s}/settings`, anyOf: ["org.settings.manage"], icon: "settings" },
       { label: "Members", href: (s) => `/o/${s}/settings/members`, anyOf: ["member.read"], icon: "users" },
+      { label: "Maintenance rules", href: (s) => `/o/${s}/settings/maintenance`, anyOf: ["workorder.configure"], icon: "sliders" },
       { label: "Roles", href: (s) => `/o/${s}/settings/roles`, anyOf: ["role.read"], icon: "shield" },
       { label: "Audit log", href: (s) => `/o/${s}/settings/audit`, anyOf: ["audit.read"], icon: "list" },
     ],

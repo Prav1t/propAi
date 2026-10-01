@@ -2,18 +2,28 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appPool, asApp, orgIdBySlug, ownerPool, userIdByEmail } from "../support/db";
 
 // Proves Postgres RLS isolates tenants for the runtime role, independent of application code.
-const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles"];
+const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders", "timeline_events", "tasks", "task_checklist_items", "inspection_templates",
+  "inspections", "inspection_items", "incidents", "complaints", "files", "notifications", "notification_preferences", "outbox_events"];
+const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
 
 let A: string; // Pacific Properties
 let B: string; // Northshore Strata
 let adminId: string; // member of both orgs
 
+let fileFixture: string[] = [];
 beforeAll(async () => {
   A = await orgIdBySlug("pacific-properties");
   B = await orgIdBySlug("northshore-strata");
   adminId = await userIdByEmail("admin@demo.test");
+  // seed data has no uploaded files; add one metadata row per org so the files checks are meaningful
+  const wo = await ownerPool.query("select distinct on (org_id) org_id, id from work_orders where org_id = any($1)", [[A, B]]);
+  const ins = await ownerPool.query(
+    "insert into files (org_id, entity_type, entity_id, storage_key, filename, content_type, size_bytes, sha256, visibility) select org_id, 'work_order', id, org_id || '/test/' || id, 'fixture.pdf', 'application/pdf', 1, repeat('0', 64), 'internal' from unnest($1::uuid[], $2::uuid[]) as t(org_id, id) returning id",
+    [wo.rows.map((r) => r.org_id), wo.rows.map((r) => r.id)]);
+  fileFixture = ins.rows.map((r) => r.id);
 });
 afterAll(async () => {
+  if (fileFixture.length) await ownerPool.query("delete from files where id = any($1)", [fileFixture]);
   await appPool.end();
   await ownerPool.end();
 });
@@ -35,6 +45,39 @@ describe("reads", () => {
       const { rows } = await q(`select count(*)::int as n from ${table} where org_id is distinct from $1`, [A]);
       expect(rows[0].n).toBe(0);
     });
+  });
+  it.each(OPS_TABLES)("%s: both orgs have rows (so the check above is meaningful)", async (table) => {
+    const { rows } = await ownerPool.query(`select count(distinct org_id)::int n from ${table} where org_id = any($1)`, [[A, B]]);
+    expect(rows[0].n).toBe(2);
+  });
+  it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events"])("%s: no context sees nothing", async (table) => {
+    await asApp({}, async (q) => {
+      const { rows } = await q(`select count(*)::int as n from ${table}`);
+      expect(rows[0].n).toBe(0);
+    });
+  });
+  it("notifications: users only see their own, even inside their org", async () => {
+    const pm = await userIdByEmail("pm@demo.test");
+    await asApp({ orgId: A, userId: pm }, async (q) => {
+      const { rows } = await q("select count(*)::int n from notifications where user_id <> $1", [pm]);
+      expect(rows[0].n).toBe(0);
+    });
+    const { rows } = await ownerPool.query("select count(*)::int n from notifications where org_id = $1 and user_id <> $2", [A, pm]);
+    expect(rows[0].n).toBeGreaterThan(0);
+  });
+  it("outbox: org context enqueues only for itself; the worker's system context reads across orgs", async () => {
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      expect((await q("select count(*)::int n from outbox_events where org_id <> $1", [A])).rows[0].n).toBe(0);
+      await q("insert into outbox_events (org_id, type, payload) values ($1, 'test', '{}')", [A]);
+      await expect(q("insert into outbox_events (org_id, type, payload) values ($1, 'test', '{}')", [B])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ system: true }, async (q) => {
+      const { rows } = await q("select count(distinct org_id)::int n from outbox_events");
+      expect(rows[0].n).toBe(2);
+    });
+  });
+  it("system context cannot write tenant rows into an org it doesn't name", async () => {
+    await expect(asApp({ system: true }, (q) => q("insert into work_orders (org_id, number, property_id, category, title) select org_id, 99999, property_id, 'general', 'x' from work_orders limit 1"))).rejects.toThrow(/row-level security/);
   });
   it("seed data exists in both orgs (so the checks above are meaningful)", async () => {
     const { rows } = await ownerPool.query("select org_id, count(*)::int n from units group by org_id");
@@ -98,5 +141,19 @@ describe("writes", () => {
   });
   it("cannot write audit entries into another org", async () => {
     await expect(asApp({ orgId: A, userId: adminId }, (q) => q("insert into audit_logs (org_id, action, entity_type) values ($1, 'x', 'y')", [B]))).rejects.toThrow(/row-level security/);
+  });
+});
+
+describe("notifications write policy", () => {
+  it("a request context cannot create notifications for another user", async () => {
+    const pm = await userIdByEmail("pm@demo.test");
+    await expect(asApp({ orgId: A, userId: adminId }, (q) => q("insert into notifications (org_id, user_id, kind, title) values ($1, $2, 'x', 'spoof')", [A, pm]))).rejects.toThrow(/row-level security/);
+  });
+  it("the worker's system context can, but only inside the org it names", async () => {
+    const pm = await userIdByEmail("pm@demo.test");
+    await asApp({ orgId: A, system: true }, async (q) => {
+      expect((await q("insert into notifications (org_id, user_id, kind, title) values ($1, $2, 'x', 'ok')", [A, pm])).rowCount).toBe(1);
+      await expect(q("insert into notifications (org_id, user_id, kind, title) values ($1, $2, 'x', 'nope')", [B, pm])).rejects.toThrow(/row-level security/);
+    });
   });
 });

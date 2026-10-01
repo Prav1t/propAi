@@ -7,11 +7,11 @@ export const ownerPool = new Pool({ connectionString: TEST_ENV.MIGRATION_DATABAS
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- raw SQL rows in test helpers */
 // run SQL as the app role with a given RLS context inside a rolled-back transaction
-export async function asApp<T>(ctx: { orgId?: string; userId?: string; platformAdmin?: boolean }, fn: (q: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }>) => Promise<T>): Promise<T> {
+export async function asApp<T>(ctx: { orgId?: string; userId?: string; platformAdmin?: boolean; system?: boolean }, fn: (q: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }>) => Promise<T>): Promise<T> {
   const c = await appPool.connect();
   try {
     await c.query("BEGIN");
-    await c.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true), set_config('app.platform_admin', $3, true)", [ctx.orgId ?? "", ctx.userId ?? "", ctx.platformAdmin ? "on" : "off"]);
+    await c.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true), set_config('app.platform_admin', $3, true), set_config('app.system', $4, true)", [ctx.orgId ?? "", ctx.userId ?? "", ctx.platformAdmin ? "on" : "off", ctx.system ? "on" : "off"]);
     return await fn((sql, params) => c.query(sql, params as any[]));
   } finally {
     await c.query("ROLLBACK").catch(() => {});

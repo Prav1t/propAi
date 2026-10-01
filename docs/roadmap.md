@@ -7,8 +7,8 @@ Each iteration must end runnable, building, tested, documented, with demo data. 
 | 0 | Discovery + architecture | ✅ Done | Research, requirements, architecture, AI architecture, schema, roadmap docs |
 | 1 | Application foundation | ✅ Done | Register → verify → create org → enter; login with MFA; invitations; RBAC + scopes; RLS tenant isolation proven by tests; settings; audit log; seed; Docker |
 | 2 | Property / portfolio core | ✅ Done | CRUD for portfolios, properties, buildings, floors, units, residents (occupancy), staff, vendors; search + filters; detail pages; Cmd/Ctrl-K navigation |
-| 3 | Operations core | ⏭ Next | Maintenance state machine + SLA, vendor assignment + vendor portal, tasks, inspections (templates, checklists), incidents, complaints; outbox events; notifications (in-app + email) |
-| 4 | Community + resident experience | | Resident dashboard (mobile-first), amenities + booking rules engine, packages, announcements, messaging, documents + file storage |
+| 3 | Operations core | ✅ Done | Maintenance state machine + SLA, vendor assignment + vendor portal, tasks, inspections (templates, checklists), incidents, complaints; outbox events; notifications (in-app + email) |
+| 4 | Community + resident experience | ⏭ Next | Resident dashboard (mobile-first), amenities + booking rules engine, packages, announcements, messaging, documents + file storage |
 | 5 | Concierge + facility | | Concierge console, visitors + QR passes, parking permits/violations, shifts + handoff notes, assets, preventive maintenance, downtime |
 | 6 | AI foundation | | Provider abstraction (incl. demo mode), tool registry, read-only tools, conversations, AI logs, chat UI with status states |
 | 7 | Agentic AI | | Mutation tools, policy engine, dry-run plans, approvals, verification, AI eval suite |
@@ -19,14 +19,17 @@ Each iteration must end runnable, building, tested, documented, with demo data. 
 | 12 | UX polish | | Loading/empty/error states, accessibility audit, mobile passes, PWA, voice input |
 | 13 | Production readiness | | Prod Docker, migrations runbook, backups, monitoring, deployment guide |
 
-## Iteration 3 — detailed plan (operations core)
+Iteration reports: [1](iterations/iteration-01.md) · [2](iterations/iteration-02.md) · [3](iterations/iteration-03.md)
 
-Vertical slice first: **resident submits a request → manager triages → assigns staff or vendor → vendor sees only their job → status updates notify the resident → completion with cost and resolution notes.**
+## Iteration 4 — detailed plan (community + resident experience)
 
-1. **Schema:** `work_orders` (number per org, property/building/unit/area, category, priority, emergency flag, status state machine, submitted_by, assigned membership / vendor, SLA due timestamps, scheduled window, completed_at, cost, resolution), `work_order_events` (timeline: status changes, comments, assignments), `sla_policies` (per org/property × priority: respond-within, resolve-within), `tasks` (+ checklist items, recurrence rule, dependencies), `inspection_templates` / `inspections` / `inspection_items` (pass/fail/N/A, severity, notes), `incidents` (+ events, people involved), `complaints`, `outbox_events`, `notifications`, `notification_preferences`. RLS + isolation tests for every table.
-2. **Rules, not AI:** configurable emergency keywords and category → team routing per property (the AI in Iteration 7 will call these same rules).
-3. **Services:** state machine with allowed transitions per role; vendor principals (`vendorId`) see only their assigned work orders (`workorder.read.assigned`); residents see only their own (`.own`); SLA due dates computed from policy; every change writes a timeline event + audit log + outbox event.
-4. **Notifications:** outbox worker (in-process, polling) delivering in-app notifications and email through the existing mailer; notification bell + inbox; per-user preferences.
-5. **UI:** maintenance board (list + filters + status tabs), work order detail with timeline and actions, resident "submit a request" mobile-first form, vendor portal job list, tasks, inspections (run a checklist on mobile), incidents, complaints. Dashboard KPIs from real data: open, overdue, by category, avg response/resolution time.
-6. **File attachments:** photos on requests/inspections/incidents via S3-compatible storage (MinIO in Docker), signed URLs, type/size validation — moved up from Iteration 4 because maintenance needs photos.
-7. **Tests:** state-machine unit tests, SLA math, vendor/resident record-level visibility, cross-tenant attempts on every new table, E2E for the full vertical slice.
+Vertical slice first: **a resident books the party room from their phone → booking rules are checked (window, duration, capacity, blackout dates, approval, deposit) → manager approves → resident is notified; a package arrives → concierge logs it → resident is notified → pickup is signed for.**
+
+1. **Schema:** `amenities` (per property/building, capacity, hours, booking window, min/max duration, approval required, deposit/fee config, active), `amenity_rules` (blackout dates, per-unit limits, resident eligibility), `bookings` (status machine: requested → approved/declined → cancelled/completed; conflict-safe with an exclusion constraint on `tstzrange`), `packages` (carrier, tracking, recipient unit/resident, shelf location, photo, received_by, picked_up_at + signature/name), `announcements` (property/building audience, publish/expire, pinned), `message_threads` + `messages` (resident ↔ management), `documents` + `document_versions` (category, audience, visibility) reusing `files`. RLS + isolation tests on every table.
+2. **Booking rules engine (pure, unit-tested):** availability, overlap, booking window, max per unit per period, blackout dates, approval and deposit requirements → a decision with reasons. Iteration 7's AI will call the same engine.
+3. **Resident experience (mobile-first):** home screen with requests, bookings, packages, announcements and messages; book an amenity; see and cancel bookings; package list with pickup codes; message management; documents library.
+4. **Staff:** amenity setup, booking approvals queue and calendar (day/week/agenda), package log with fast intake (unit lookup, carrier, shelf), bulk pickup, overdue-package view; announcement composer with audience preview; inbox for resident messages; document library with versions.
+5. **Notifications:** new kinds (booking requested/approved/declined, package arrived/reminder, announcement published, new message) through the existing outbox.
+6. **Tests:** rules-engine unit tests, overlap constraint integration test, resident/staff visibility, cross-tenant checks, E2E: resident books → manager approves → resident notified; concierge logs package → resident sees it.
+
+Carried over from Iteration 3: S3/MinIO verified in Docker (the adapter exists but wasn't run against a real bucket in the build environment), shift-aware on-call routing for emergencies (Iteration 5 with shifts).

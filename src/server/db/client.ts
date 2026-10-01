@@ -31,6 +31,7 @@ export type DbContext = {
   userId?: string | null;
   platformAdmin?: boolean;
   inviteTokenHash?: string | null;
+  system?: boolean; // background worker only (outbox delivery, SLA monitor)
 };
 
 // runs fn in a transaction with transaction-local RLS settings (safe with pooling)
@@ -40,7 +41,8 @@ export async function withContext<T>(ctx: DbContext, fn: (tx: Tx) => Promise<T>)
       set_config('app.org_id', ${ctx.orgId ?? ""}, true),
       set_config('app.user_id', ${ctx.userId ?? ""}, true),
       set_config('app.platform_admin', ${ctx.platformAdmin ? "on" : "off"}, true),
-      set_config('app.invite_token_hash', ${ctx.inviteTokenHash ?? ""}, true)`);
+      set_config('app.invite_token_hash', ${ctx.inviteTokenHash ?? ""}, true),
+      set_config('app.system', ${ctx.system ? "on" : "off"}, true)`);
     return fn(tx);
   });
 }

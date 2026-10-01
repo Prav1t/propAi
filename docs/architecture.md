@@ -90,6 +90,19 @@ Migrations and seeds run as the owner role (bypasses RLS as table owner). The ru
 
 Postgres full-text search over generated `tsvector` columns (config `simple`) with GIN indexes. User input goes through `toPrefixQuery()`, which strips all tsquery operators and builds a prefix `AND` query, so typed text can never inject query syntax. Global search runs one query per entity type the principal can read, each with the same scope predicate as the list pages. The Cmd/Ctrl-K palette calls it through a server action.
 
+### Operations records (Iteration 3)
+
+Each record type has one access function used by its list query (as SQL), its detail page and every mutation:
+
+| Viewer | Work orders | Timeline / files they see |
+|---|---|---|
+| Manager (`workorder.manage` on the property) | all in scope; triage, assign, schedule, any transition | public + vendor + internal |
+| Staff reader (`workorder.read`) | all in scope, read-only | public + vendor + internal |
+| Assignee / vendor user (`workorder.read.assigned`) | only work assigned to them or their company; schedule and move work along, never cancel/close/reopen | public + vendor |
+| Requester (`workorder.read.own`) | only their own requests (or their resident record's); withdraw before work starts | public only; entry notes and vendor phone hidden |
+
+Incidents, complaints, tasks and inspections follow the same pattern (scoped staff, assignee, reporter/submitter), with internal notes never shown to residents and `people_involved` hidden from non-staff reporters. Status rules live in pure functions (`maintenance/rules.ts`) with unit tests.
+
 ## 7. Security baseline
 
 Implemented in Iteration 1 unless marked planned:
@@ -102,15 +115,34 @@ Implemented in Iteration 1 unless marked planned:
 - All input validated with Zod at the boundary; all SQL parameterised via Drizzle.
 - Generic auth errors (no account enumeration on login / reset).
 - Audit log for auth, membership and settings changes.
-- Planned: SSRF-safe fetcher for webhooks (Iteration 10), file scanning (Iteration 4), secret rotation guide (Iteration 13).
+- File uploads: magic-byte type detection, size limits, scanning hook, permission-checked and audited downloads (§9).
+- Planned: SSRF-safe fetcher for webhooks (Iteration 10), a real malware scanner adapter (ClamAV) and secret rotation guide (Iteration 13).
 
-## 8. Events (planned, Iteration 3+)
+## 8. Events, notifications and the worker (Iteration 3)
 
-Domain events (`MaintenanceRequestCreated`, `PackageArrived`, `SlaBreached`, …) are written to an `outbox` table in the same transaction as the change. A worker delivers them to in-process subscribers (notifications, workflow engine, webhooks, AI insights). This gives at-least-once delivery without a broker. Subscribers must be idempotent (keyed on event ID).
+```
+service (one transaction)                 worker (system context)
+  update work_orders ...                     drainOutbox()
+  insert timeline_events ...                   for each pending outbox_events row:
+  insert audit_logs ...                          claim it (SELECT … FOR UPDATE SKIP LOCKED)
+  insert outbox_events (type, payload) ──▶      deliveriesFor(event) → recipients + message
+                                                 insert notifications (unique per event+user)
+                                                 mark processed; commit; then send emails
+```
 
-## 9. Storage (planned, Iteration 4)
+- **Transactional outbox:** `emit()` writes an `outbox_events` row in the same transaction as the change, so an event exists if and only if the change committed. Event types so far: `workorder.created|assigned|status_changed|commented|sla_breached`, `task.assigned`, `incident.created|escalated`, `complaint.created|status_changed|commented`, `inspection.failed`.
+- **Delivery** (`src/server/modules/notifications/service.ts`): recipients are resolved from live data (managers whose role and scope cover the property; the assignee; the vendor's users; the requester), the actor is excluded, and a comment's visibility limits who hears about it. Notifications are unique per `(event_id, user_id)`, so re-processing is harmless; emails go out only after commit. Per-user, per-kind preferences control in-app and email.
+- **Triggers:** right after a form action (`after()` in `runOrgForm`), on an in-process 30-second loop started from `src/instrumentation.ts`, or a separate `npm run worker` process (set `DISABLE_INPROCESS_WORKER=true` on app instances when you run it).
+- **System context:** the worker sets `app.system = 'on'`, which lets RLS read across orgs to find pending work. Writes still require naming the org (`WITH CHECK (org_id = app_org())`), and a request context can only notify its own user.
+- **SLA monitor:** each tick flags open work orders past `resolve_due_at` once (`sla_breached_at`), adds an internal timeline entry, and emits `workorder.sla_breached`.
+- **Next:** the workflow engine (Iteration 9), webhooks (10) and AI insights subscribe to the same outbox.
 
-Private bucket; object keys `org/{orgId}/{module}/{uuid}`; metadata row in `files` with owner entity, MIME sniffed server-side, size limits per module, scan status. Downloads via short-lived signed URLs issued only after `authorize()`. Access logged.
+## 9. File storage (Iteration 3)
+
+- `BlobStore` interface with two adapters: **local disk** (`FILE_STORAGE=local`, path-traversal-safe keys) and **S3-compatible** (`FILE_STORAGE=s3`: AWS S3, MinIO, R2).
+- Keys are `{orgId}/{entity}/{uuid}`; the `files` row stores the owner record, sniffed MIME type, size, SHA-256, visibility (`public`/`vendor`/`internal`, the same levels as the timeline) and scan status.
+- **Upload:** the real type is detected from magic bytes (JPEG, PNG, WebP, GIF, HEIC, PDF, MP4, MOV); the browser's claim is ignored. Per-type size limits; at most 5 files per upload; a `FileScanner` hook (no-op by default) can block files. Blobs are deleted if the database insert fails.
+- **Download:** `/o/{org}/files/{id}` re-checks access to the owning record and the file's visibility, writes a `file.downloaded` audit entry, then streams bytes (local) or redirects to a 60-second presigned URL (S3). Responses carry `nosniff`, a sandboxing CSP and `Content-Disposition` (only raster images render inline). Storage URLs are never stored or shown.
 
 ## 10. Integrations (planned, Iteration 10)
 

@@ -9,7 +9,7 @@ import { SubmitButton } from "./button";
 export type FieldDef = {
   name: string;
   label: string;
-  type?: "text" | "email" | "tel" | "url" | "number" | "date" | "textarea" | "select" | "checkbox";
+  type?: "text" | "email" | "tel" | "url" | "number" | "date" | "datetime-local" | "textarea" | "select" | "checkbox";
   options?: { value: string; label: string }[];
   defaultValue?: string | number | boolean | null;
   placeholder?: string;
@@ -18,6 +18,7 @@ export type FieldDef = {
   span?: 1 | 2;
   step?: string;
   autoFocus?: boolean;
+  maxLength?: number;
 };
 
 type Props = {
@@ -62,10 +63,10 @@ export function SchemaForm({ action, fields, submitLabel, pendingLabel, hidden, 
                     {f.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </Select>
                 ) : f.type === "textarea" ? (
-                  <textarea {...p} defaultValue={String(value(f))} rows={4} placeholder={f.placeholder}
+                  <textarea {...p} defaultValue={String(value(f))} rows={4} placeholder={f.placeholder} maxLength={f.maxLength}
                     className="block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 py-2 text-sm placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20" />
                 ) : (
-                  <Input {...p} type={f.type ?? "text"} defaultValue={String(value(f))} placeholder={f.placeholder} required={f.required} step={f.step} autoFocus={f.autoFocus} />
+                  <Input {...p} type={f.type ?? "text"} defaultValue={String(value(f))} placeholder={f.placeholder} required={f.required} step={f.step} autoFocus={f.autoFocus} maxLength={f.maxLength} />
                 )
               }
             </Field>

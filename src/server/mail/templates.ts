@@ -57,3 +57,13 @@ export function newSignInTemplate(name: string, when: string, ip: string | null,
     html: layout("New sign-in detected", `<p>Hi ${esc(name)}, we noticed a sign-in from a device we haven't seen before.</p><p style="font-size:13px"><strong>${esc(when)}</strong><br>${esc(where)}</p><p>If this wasn't you, change your password and sign out other sessions.</p>${button(securityUrl, "Review security")}`),
   };
 }
+
+export function notificationTemplate(title: string, body: string | null, url: string): RenderedEmail {
+  return {
+    template: "notification",
+    sensitive: false,
+    subject: title,
+    text: `${title}\n\n${body ? `${body}\n\n` : ""}Open: ${url}\n\nYou can change which emails you get under Notifications in ${BRAND.name}.`,
+    html: layout(title, `${body ? `<p style="white-space:pre-line">${esc(body)}</p>` : ""}${button(url, "Open")}<p style="font-size:12px;color:#71717a">Change which emails you get under Notifications in ${esc(BRAND.name)}.</p>`),
+  };
+}

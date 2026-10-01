@@ -7,4 +7,6 @@ export const TEST_ENV = {
   MAIL_PROVIDER: "console",
   NODE_ENV: "test",
   LOG_LEVEL: "error",
+  FILE_STORAGE: "local",
+  FILE_STORAGE_DIR: "/tmp/propai-test-uploads",
 } as const;

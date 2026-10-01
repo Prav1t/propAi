@@ -3,6 +3,19 @@ import { getOrgContext } from "@/server/org-context";
 import { getOrgStats, listAuditLogs, listMyUnits } from "@/server/modules/organizations/service";
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th } from "@/components/ui/primitives";
 import { describeAudit } from "@/lib/audit-labels";
+import { LinkButton } from "@/components/ui/button";
+import { BarList } from "@/components/ops/bar-list";
+import { WoMiniList } from "@/components/ops/wo-mini-list";
+import { listWorkOrders, canListWorkOrders } from "@/server/modules/maintenance/service";
+import { listComplaints } from "@/server/modules/complaints/service";
+import { listTasks, canUseTasks } from "@/server/modules/tasks/service";
+import { getOpsKpis } from "@/server/modules/ops/kpis";
+import { COMPLAINT_STATUS, TASK_STATUS, WO_CATEGORY } from "@/lib/ops-labels";
+import { relative } from "@/lib/time";
+
+function StatLink({ href, ...p }: { href: string; label: string; value: React.ReactNode; sub?: React.ReactNode }) {
+  return <Link href={href} className="block rounded-[var(--radius-lg)] focus-visible:outline-2 [&>div]:hover:border-border-strong"><Stat {...p} /></Link>;
+}
 
 export const metadata = { title: "Dashboard" };
 
@@ -15,11 +28,37 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   const { ctx, principal, session } = await getOrgContext(orgSlug);
   const first = session.user.name.split(" ")[0];
 
+  const base = `/o/${orgSlug}`;
   if (principal.role.scopeLevel === "occupant") {
     const myUnits = await listMyUnits(ctx);
+    const [reqs, comps] = await Promise.all([
+      canListWorkOrders(principal) ? listWorkOrders(ctx, { view: "open", pageSize: 5 }) : null,
+      principal.permissions.has("complaint.create") ? listComplaints(ctx, { view: "open" }) : null,
+    ]);
     return (
       <>
-        <PageHeader title={`Hi ${first}`} description={principal.orgName} />
+        <PageHeader title={`Hi ${first}`} description={principal.orgName}
+          actions={principal.permissions.has("workorder.create") && myUnits.length ? <LinkButton href={`${base}/maintenance/new`}>Report a problem</LinkButton> : null} />
+        <div className="mb-6 grid gap-6 lg:grid-cols-2">
+          {reqs ? (
+            <Panel>
+              <PanelHeader title="Open requests" actions={<Link href={`${base}/maintenance`} className="text-[13px] text-accent hover:underline">All requests</Link>} />
+              <WoMiniList rows={reqs.rows} base={base} empty="No open requests" showLocation={false} />
+            </Panel>
+          ) : null}
+          {comps ? (
+            <Panel>
+              <PanelHeader title="Open complaints" actions={<Link href={`${base}/complaints`} className="text-[13px] text-accent hover:underline">All complaints</Link>} />
+              {comps.rows.length === 0 ? <EmptyState title="Nothing open" /> : (
+                <ul className="divide-y divide-border">{comps.rows.slice(0, 5).map((c) => (
+                  <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <Link href={`${base}/complaints/${c.id}`} className="truncate text-sm font-medium hover:underline">{c.subject}</Link>
+                    <Badge tone={COMPLAINT_STATUS[c.status]?.tone}>{COMPLAINT_STATUS[c.status]?.label}</Badge>
+                  </li>))}</ul>
+              )}
+            </Panel>
+          ) : null}
+        </div>
         <Panel>
           <PanelHeader title="Your home" />
           {myUnits.length === 0 ? (
@@ -43,10 +82,14 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   }
 
   if (!principal.permissions.has("property.read")) {
+    const jobs = canListWorkOrders(principal) ? await listWorkOrders(ctx, { view: "open", pageSize: 10 }) : null;
     return (
       <>
-        <PageHeader title={`Hi ${first}`} description={principal.orgName} />
-        <Panel><EmptyState title="Nothing assigned to you yet">Work assigned to you by {principal.orgName} will appear here.</EmptyState></Panel>
+        <PageHeader title={`Hi ${first}`} description={principal.vendorId ? `Jobs from ${principal.orgName}` : principal.orgName} />
+        <Panel>
+          <PanelHeader title="Open jobs" description={jobs ? `${jobs.total} open` : undefined} actions={jobs ? <Link href={`${base}/maintenance`} className="text-[13px] text-accent hover:underline">All jobs</Link> : null} />
+          {jobs ? <WoMiniList rows={jobs.rows} base={base} empty="Nothing assigned to you right now" /> : <EmptyState title="Nothing assigned to you yet">Work assigned to you by {principal.orgName} will appear here.</EmptyState>}
+        </Panel>
       </>
     );
   }
@@ -55,6 +98,10 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   const activity = principal.permissions.has("audit.read") ? (await listAuditLogs(ctx, { page: 1, pageSize: 8 })).rows : null;
   const occupancy = stats.units ? Math.round((stats.occupied / stats.units) * 100) : null;
   const scoped = principal.role.scopeLevel === "scoped";
+  const kpis = await getOpsKpis(ctx);
+  const wo = kpis.workOrders;
+  const assignedToMe = principal.permissions.has("workorder.read.assigned") || principal.permissions.has("workorder.manage") ? await listWorkOrders(ctx, { view: "mine", pageSize: 6 }) : null;
+  const myTasks = canUseTasks(principal) ? await listTasks(ctx, { view: "mine" }) : null;
 
   return (
     <>
@@ -62,6 +109,49 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
         title={`Good to see you, ${first}`}
         description={scoped ? `Showing the ${stats.properties === 1 ? "property" : "properties"} assigned to you as ${principal.role.name}.` : `Portfolio overview for ${principal.orgName}.`}
       />
+      {wo ? (
+        <section aria-labelledby="ops-h" className="mb-6">
+          <h2 id="ops-h" className="sr-only">Operations</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <StatLink href={`${base}/maintenance`} label="Open work orders" value={wo.open} sub={`${wo.unassigned} unassigned`} />
+            <StatLink href={`${base}/maintenance?view=overdue`} label="Overdue" value={<span className={wo.overdue ? "text-danger" : undefined}>{wo.overdue}</span>} sub="past resolution target" />
+            <StatLink href={`${base}/maintenance?view=emergency`} label="Emergencies" value={<span className={wo.emergency ? "text-danger" : undefined}>{wo.emergency}</span>} sub="open" />
+            <Stat label="SLA met" value={wo.slaCompliance === null ? "—" : `${wo.slaCompliance}%`} sub={`${wo.completed} completed · 30 days`} />
+            <Stat label="Avg. first response" value={wo.avgResponseH === null ? "—" : `${wo.avgResponseH} h`} sub={wo.avgResolveH === null ? "30 days" : `resolve ${wo.avgResolveH} h · 30 days`} />
+            <Stat label="Maintenance spend" value={`$${Math.round(wo.spend).toLocaleString("en-CA")}`} sub="completed · 30 days" />
+          </div>
+          <div className="mt-6 grid gap-6 lg:grid-cols-3">
+            <Panel><PanelHeader title="Open by property" description="Overdue in brackets" />
+              <BarList rows={wo.byProperty.map((r) => ({ key: r.id, label: r.key, value: r.n, sub: r.overdue ? `${r.overdue} overdue` : undefined }))} href={(k) => `${base}/maintenance?property=${k}`} emptyLabel="No open work" /></Panel>
+            <Panel><PanelHeader title="Open by category" />
+              <BarList rows={wo.byCategory.map((r) => ({ key: r.key, label: WO_CATEGORY[r.key] ?? r.key, value: r.n }))} href={(k) => `${base}/maintenance?category=${k}`} emptyLabel="No open work" /></Panel>
+            <Panel><PanelHeader title="Open by vendor" />
+              <BarList rows={wo.byVendor.map((r) => ({ key: r.id, label: r.key, value: r.n, sub: r.overdue ? `${r.overdue} overdue` : undefined }))} emptyLabel="No vendor work open" /></Panel>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+            {kpis.complaints ? <StatLink href={`${base}/complaints`} label="Open complaints" value={kpis.complaints.open} /> : null}
+            {kpis.incidents ? <StatLink href={`${base}/incidents`} label="Open incidents" value={kpis.incidents.open} sub={`${kpis.incidents.openSerious} high/critical · ${kpis.incidents.last7} in 7 days`} /> : null}
+            {kpis.inspections ? <StatLink href={`${base}/inspections`} label="Inspections next 14 days" value={kpis.inspections.upcoming} sub={kpis.inspections.overdue ? `${kpis.inspections.overdue} overdue` : "none overdue"} /> : null}
+            <StatLink href={`${base}/tasks?view=mine`} label="My open tasks" value={kpis.myTasks.open} sub={kpis.myTasks.overdue ? `${kpis.myTasks.overdue} overdue` : undefined} />
+          </div>
+        </section>
+      ) : null}
+
+      {(assignedToMe && assignedToMe.total) || (myTasks && myTasks.total) ? (
+        <div className="mb-6 grid gap-6 lg:grid-cols-2">
+          {assignedToMe ? <Panel><PanelHeader title="Assigned to me" actions={<Link href={`${base}/maintenance?view=mine`} className="text-[13px] text-accent hover:underline">View all</Link>} />
+            <WoMiniList rows={assignedToMe.rows} base={base} empty="Nothing assigned to you" /></Panel> : null}
+          {myTasks ? <Panel><PanelHeader title="My tasks" actions={<Link href={`${base}/tasks?view=mine`} className="text-[13px] text-accent hover:underline">View all</Link>} />
+            {myTasks.rows.length === 0 ? <EmptyState title="No open tasks" /> : (
+              <ul className="divide-y divide-border">{myTasks.rows.slice(0, 6).map((t) => (
+                <li key={t.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <Link href={`${base}/tasks/${t.id}`} className="truncate text-sm font-medium hover:underline">{t.title}</Link>
+                  <span className="flex shrink-0 items-center gap-2">{t.dueAt ? <span className={`text-[11px] ${t.overdue ? "text-danger" : "text-faint"}`}>{relative(t.dueAt)}</span> : null}<Badge tone={TASK_STATUS[t.status]?.tone}>{TASK_STATUS[t.status]?.label}</Badge></span>
+                </li>))}</ul>
+            )}</Panel> : null}
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <Stat label="Properties" value={stats.properties} />
         <Stat label="Buildings" value={stats.buildings} />

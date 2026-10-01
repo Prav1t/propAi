@@ -53,7 +53,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
   {
     key: "facility_manager", name: "Facility Manager", category: "staff", scopeLevel: "scoped",
     description: "Assets, preventive maintenance, inspections and vendors.",
-    permissions: [...OPS_READ, "workorder.manage", "workorder.create", "vendor.manage", "task.manage",
+    permissions: [...OPS_READ, "workorder.manage", "workorder.configure", "workorder.create", "vendor.manage", "task.manage",
       "inspection.manage", "incident.create", "incident.manage", "asset.manage", "finance.read", "analytics.read"],
   },
   {

@@ -44,10 +44,15 @@ services:
       SMTP_URL: smtp://mailpit:1025
       MAIL_FROM: "[YOUR PRODUCT NAME] <no-reply@example.test>"
       SHOW_DEMO_ACCOUNTS: ${SHOW_DEMO_ACCOUNTS:-true}
+      FILE_STORAGE: ${FILE_STORAGE:-local}
+      FILE_STORAGE_DIR: /app/.data/uploads
     ports: ["3000:3000"]
+    volumes:
+      - uploads:/app/.data/uploads
     depends_on:
       migrate: { condition: service_completed_successfully }
       mailpit: { condition: service_started }
 
 volumes:
   pgdata:
+  uploads:

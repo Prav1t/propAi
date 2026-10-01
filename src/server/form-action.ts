@@ -1,6 +1,7 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import type { z } from "zod";
 import { getOrgContext } from "./org-context";
 import { toActionError, zodFieldErrors, type ActionState } from "./actions";
@@ -31,6 +32,11 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   } catch (e) {
     return toActionError(e, values);
   }
+  // deliver notifications for whatever this change emitted, without delaying the response
+  after(async () => {
+    const { drainOutbox } = await import("./modules/notifications/service");
+    await drainOutbox().catch(() => {});
+  });
   const d = opts.done(result);
   for (const p of d.revalidate ?? [`/o/${opts.orgSlug}`]) revalidatePath(p, "layout");
   if (d.redirectTo) redirect(d.redirectTo);
