@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, desc, eq, gte, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { buildings, incidents, properties, units, users, INCIDENT_TYPES } from "../../db/schema";
 import { authorize, can, ForbiddenError, NotFoundError, type Principal } from "../../authz/authorize";
@@ -30,15 +30,16 @@ export const canUseIncidents = (p: Principal) => p.permissions.has("incident.rea
 
 export type IncidentRow = { id: string; number: number; title: string; type: string; severity: string; status: string; occurredAt: Date; propertyName: string; location: string | null; reporterName: string | null };
 
-export async function listIncidents(ctx: TenantCtx, opts: { view?: "open" | "recent" | "all"; type?: string; severity?: string; propertyId?: string; page?: number }): Promise<Page<IncidentRow>> {
+export async function listIncidents(ctx: TenantCtx, opts: { view?: "open" | "recent" | "all"; type?: string; severity?: string; propertyId?: string; buildingId?: string; since?: Date; until?: Date; page?: number; pageSize?: number }): Promise<Page<IncidentRow>> {
   const p = ctx.principal;
   if (!canUseIncidents(p)) throw new ForbiddenError();
-  const { page, pageSize, offset } = pageArgs(opts.page);
+  const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize);
   const viewCond = { open: inArray(incidents.status, ["open", "investigating"]), recent: gte(incidents.occurredAt, new Date(Date.now() - 7 * 86_400_000)), all: undefined }[opts.view ?? "open"];
   return tenantTx(ctx, async (tx) => {
     const where = and(eq(incidents.orgId, p.orgId), visibleWhere(p), viewCond,
       opts.type ? eq(incidents.type, opts.type) : undefined, opts.severity ? eq(incidents.severity, opts.severity) : undefined,
-      opts.propertyId ? eq(incidents.propertyId, opts.propertyId) : undefined);
+      opts.propertyId ? eq(incidents.propertyId, opts.propertyId) : undefined, opts.buildingId ? eq(incidents.buildingId, opts.buildingId) : undefined,
+      opts.since ? gte(incidents.occurredAt, opts.since) : undefined, opts.until ? lt(incidents.occurredAt, opts.until) : undefined);
     const [{ n }] = await tx.select({ n: count() }).from(incidents).where(where);
     const rows = await tx.select({
       id: incidents.id, number: incidents.number, title: incidents.title, type: incidents.type, severity: incidents.severity, status: incidents.status,

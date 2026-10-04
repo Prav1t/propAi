@@ -256,16 +256,24 @@ export async function seedOps(tx: Tx, orgId: string, now = new Date()) {
     { type: "water_damage", sev: "medium", title: "Sprinkler head leak in P1 parkade", status: "resolved", days: 12, prop: "HBC", res: "Firewise replaced sprinkler head." },
     { type: "equipment_failure", sev: "medium", title: "Boiler pressure alarm overnight", status: "closed", days: 20, prop: "PCH", res: "Pressure reset by on-call tech; monitoring." },
     { type: "other", sev: "low", title: "Lost dog in courtyard", status: "closed", days: 9, prop: "KWR", res: "Owner located." },
+    // earlier today, so "summarize today's incidents" has something real to summarize
+    { type: "water_damage", sev: "medium", title: "Water pooling at P2 parkade ramp", status: "open", days: 0.03, prop: "HBC", loc: "Parkade P2" },
+    { type: "security", sev: "low", title: "Lobby door propped open during a move", status: "resolved", days: 0.05, prop: "FRT", res: "Door closed; the moving company was reminded of the move-in policy.", loc: "Lobby" },
   ];
   let incNo = 0;
   const staffUsers = [concierge.userId, tech.userId, pm.userId];
+  // always draw the random location so the PRNG sequence (and everything seeded after) stays stable
+  const incLocation = (x: { loc?: string }) => {
+    const random = pick(["Lobby", "Parkade P1", "Level 3 corridor", "Bike room", "Courtyard"]);
+    return x.loc ?? random;
+  };
   for (const x of INC) {
     incNo++;
     const b = blds.find((bb) => bb.propertyId === P(x.prop).id)!;
     const at = new Date(now.getTime() - x.days * D);
     const [inc] = await tx.insert(s.incidents).values({
       orgId, number: incNo, propertyId: b.propertyId, buildingId: b.id, type: x.type, severity: x.sev, title: x.title, description: `${x.title}. Logged by front desk.`,
-      location: pick(["Lobby", "Parkade P1", "Level 3 corridor", "Bike room", "Courtyard"]), occurredAt: at, status: x.status, reportedByUserId: pick(staffUsers),
+      location: incLocation(x), occurredAt: at, status: x.status, reportedByUserId: pick(staffUsers),
       resolution: x.res ?? null, resolvedAt: x.res ? new Date(at.getTime() + between(4, 72) * H) : null, createdAt: at,
     }).returning();
     await tx.insert(s.timelineEvents).values({ orgId, entityType: "incident", entityId: inc.id, kind: "created", toStatus: "open", visibility: "public", body: `Incident #${incNo} reported.`, createdAt: at });
@@ -294,6 +302,19 @@ export async function seedOps(tx: Tx, orgId: string, now = new Date()) {
       assignedMembershipId: status === "new" ? null : u.propertyId === P("HBC").id || u.propertyId === P("FRT").id ? pm.id : admin.id,
       resolution: ["resolved", "closed", "dismissed"].includes(status) ? "Spoke with the parties involved and sent a bylaw reminder." : null,
       resolvedAt: ["resolved", "closed", "dismissed"].includes(status) ? new Date(at.getTime() + 3 * D) : null, createdAt: at,
+    }).returning();
+    await tx.insert(s.timelineEvents).values({ orgId, entityType: "complaint", entityId: c.id, kind: "created", toStatus: "new", visibility: "public", body: `Complaint #${cmpNo} received.`, createdAt: at });
+  }
+  // two recent fitness-centre complaints at Fraser Towers (the assistant demo asks "who has complained about the gym this week?")
+  const frtUnits = residentUnits.filter((u) => u.propertyId === P("FRT").id);
+  for (const [subject, days, status] of [["Treadmill in the fitness centre broken again", 1.5, "new"], ["Fitness centre too crowded before 8am", 3.2, "acknowledged"]] as const) {
+    const u = frtUnits[cmpNo % frtUnits.length];
+    const r = occ.find((o) => o.unitId === u.id)!;
+    cmpNo++;
+    const at = new Date(now.getTime() - days * D);
+    const [c] = await tx.insert(s.complaints).values({
+      orgId, number: cmpNo, propertyId: u.propertyId, buildingId: u.buildingId, unitId: u.id, category: "amenity", subject, description: `${subject}. Can someone look at the gym?`,
+      status, priority: "low", residentId: r.residentId, submittedByUserId: r.userId, assignedMembershipId: status === "new" ? null : pm.id, createdAt: at,
     }).returning();
     await tx.insert(s.timelineEvents).values({ orgId, entityType: "complaint", entityId: c.id, kind: "created", toStatus: "new", visibility: "public", body: `Complaint #${cmpNo} received.`, createdAt: at });
   }

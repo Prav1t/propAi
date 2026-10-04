@@ -1,13 +1,14 @@
 # [YOUR PRODUCT NAME]
 
-AI-native operations platform for property managers, strata/HOAs, facility teams, concierge desks and residents. The assistant, **[YOUR AI ASSISTANT NAME]**, acts through typed, permission-checked tools with approvals and a full audit trail (arriving in Iterations 6–8).
+AI-native operations platform for property managers, strata/HOAs, facility teams, concierge desks and residents. The assistant, **[YOUR AI ASSISTANT NAME]**, answers from live records through typed, permission-checked tools, and every lookup is logged. It reads only in this release; actions with approvals arrive in Iteration 7.
 
-> **Status: Iteration 5 of 13 complete.**
+> **Status: Iteration 6 of 13 complete.**
 > - **Iteration 1 — foundation:** authentication with MFA, organizations, role-based access scoped to portfolio/property/building/unit, Postgres row-level-security tenant isolation, invitations, settings, audit log.
 > - **Iteration 2 — portfolio core:** portfolios, properties, buildings (stacking plan, bulk unit generation), floors, units, residents (move-in/out history, resident-app invites), staff directory, vendors (contacts, property approvals, vendor-portal invites), permission-aware full-text search and a Cmd/Ctrl-K command palette.
 > - **Iteration 3 — operations core:** maintenance work orders (triage rules, SLA targets and monitor, vendor portal), tasks, inspections, incidents, complaints, file attachments, in-app + email notifications through a transactional outbox.
 > - **Iteration 4 — community & resident experience:** amenities with a booking rules engine and approvals, packages with pickup codes and signatures, announcements, resident ↔ management messaging with templates, a versioned document library, and a mobile-first resident app.
 > - **Iteration 5 — front desk & facility:** a front desk console, visitors with QR guest passes, parking (spaces, vehicles, permits, human-reviewed violation reports), staff shifts with on-call routing and handoffs, an asset registry with preventive maintenance and downtime, and a unified calendar.
+> - **Iteration 6 — AI foundation (read-only):** the assistant with 22 permission-filtered read tools over the domain services, a provider layer (Anthropic, OpenAI, any OpenAI-compatible server, and a labelled demo mode that needs no key), streamed answers with a visible lookup trail and record cards, private conversation history, five specialised modes, Cmd/Ctrl-K "Ask", tool-call logs, token/cost usage with per-organization caps, and an evaluation suite.
 >
 > See [`docs/roadmap.md`](docs/roadmap.md) and [`docs/iterations/`](docs/iterations/).
 
@@ -20,9 +21,12 @@ src/
   app/                 routes: (auth) pages, /orgs, /onboarding, /o/[orgSlug]/…, /account, /admin, /api/health
   components/          ui/ design system, shell/ navigation, ops/ timeline, attachments, status forms, bar lists,
                        community/ booking form, day timeline, package intake, signature pad, message composer,
+                       ai/ assistant chat, record cards, safe markdown, ask box,
                        frontdesk/ visitor form, pass card, pass scanner, plate lookup, handoff snapshot
   config/              brand placeholders, navigation
   server/
+    ai/                assistant: providers/ (anthropic, openai, demo), tools/ (registry + read tools), orchestrator,
+                       prompt, modes, conversation store, usage + caps, demo intent planner, eval/ (cases, grounding)
     auth/              passwords (argon2id), sessions, TOTP MFA, rate limiting, crypto
     authz/             permission catalog, system roles, authorize()
     db/                Drizzle schema, pooled client, withContext() for RLS
@@ -37,7 +41,7 @@ src/
     mail/              Mailer (console | SMTP) + templates
     audit.ts           audit writer (same transaction as the change)
 drizzle/               SQL migrations (incl. RLS policies)
-scripts/               migrate, seed (+ seed-ops, seed-community, seed-facility), reset, worker
+scripts/               migrate, seed (+ seed-ops, seed-community, seed-facility, seed-ai), reset, worker, ai-ask, ai-eval
 tests/                 integration (real Postgres), e2e (Playwright); unit tests live next to code
 docs/                  research, requirements, architecture, AI design, schema, roadmap
 ```
@@ -104,10 +108,11 @@ Password for every account: `DemoPass!2026`. These are created by `npm run db:se
 | `admin@northshore.test` | Organization Admin (Northshore Strata) | Second tenant, used to prove isolation |
 | `superadmin@demo.test` | Platform super admin | `/admin` console |
 
-Demo org **Pacific Properties Management**: 4 properties (Harbour Centre, Pacific Heights, Fraser Towers, Kingsway Residences) in 2 portfolios, 6 buildings, 339 units, ~550 residents (incl. move-out history), 8 vendors with contacts and property approvals, staff profiles — plus ~175 work orders over 90 days (with SLA history, costs and timelines), SLA targets and 9 triage rules, 12 tasks, 3 inspection templates and 8 inspections, 12 incidents, 23 complaints, 8 amenities with ~210 bookings and closures, 44 packages, 7 announcements, resident conversations and reply templates, 10 documents (real PDFs), ~90 visitors (expected, on site and a month of history), 223 parking spaces with ~115 registered vehicles, permits and violation reports (including a camera detection to review), ~170 shifts (front desk, security, maintenance, after-hours on call) with handoffs, 27 assets with PM schedules, a year of PM history and downtime, and notifications. Six extra staff members without logins (`*@staff.example.test`) make the schedules realistic. Data is deterministic apart from dates and the current shift, which are relative to when you seed.
+Demo org **Pacific Properties Management**: 4 properties (Harbour Centre, Pacific Heights, Fraser Towers, Kingsway Residences) in 2 portfolios, 6 buildings, 339 units, ~550 residents (incl. move-out history), 8 vendors with contacts and property approvals, staff profiles — plus ~175 work orders over 90 days (with SLA history, costs and timelines), SLA targets and 9 triage rules, 12 tasks, 3 inspection templates and 8 inspections, 14 incidents (two of them earlier today), 25 complaints, 8 amenities with ~210 bookings and closures, 44 packages, 7 announcements, resident conversations and reply templates, 10 documents (real PDFs), ~90 visitors (expected, on site and a month of history), 223 parking spaces with ~115 registered vehicles, permits and violation reports (including a camera detection to review), ~170 shifts (front desk, security, maintenance, after-hours on call) with handoffs, 27 assets with PM schedules, a year of PM history and downtime, notifications, and a few assistant conversations produced by running the real tools in demo mode. Six extra staff members without logins (`*@staff.example.test`) make the schedules realistic. Data is deterministic apart from dates and the current shift, which are relative to when you seed.
 
 Things to try:
 
+- **The assistant:** open *Assistant* (or press **Ctrl/Cmd-K** and type a question). As `pm@demo.test` try "Show me all overdue maintenance requests across my properties", "Which vendor has been the slowest this month?", "Summarize today's incidents" or "Give me my morning briefing" — the trail shows which lookup ran, and the cards link to the real records. "Book the party room tomorrow at 7 PM" checks availability and the booking rules but books nothing; "Send residents a message…" explains it can't act yet and links to the right page. As `resident@demo.test` ask "Do I have any packages?" or "Show me all residents in another building" (refused, nothing looked up). As `admin@demo.test`, "Is the gym free tomorrow at 6 PM?" asks which of the two gyms you mean, and *Organization → AI assistant* shows usage, cost estimates, the tool-call log and the monthly limit. Without an API key the assistant runs in **demo mode** (labelled on every answer).
 - **The maintenance loop:** sign in as `resident@demo.test` → *Report a problem* → title "Water spreading under my sink" → the triage rules make it an urgent emergency, assign Blake Plumbing, and show the configured "what to do now" guidance. Then sign in as `vendor@demo.test` to see only that company's jobs, start and complete it (resolution notes required), and as the resident again to see the notification bell and the outcome.
 - `pm@demo.test` → dashboard KPIs (open, overdue, SLA met, response time, spend — all computed from rows in their two properties), *Maintenance → Overdue*, assign staff or an approved vendor (★ marks matching trades), internal vs vendor vs public comments, *Organization → Maintenance rules* for SLA targets and triage rules.
 - `facility@demo.test` → *Inspections* → schedule from a template, fail an item, complete and sign, then turn the failure into a follow-up work order.
@@ -128,6 +133,8 @@ Things to try:
 npm run test:unit          # pure logic: authorization, crypto, TOTP, rate limits, templates…
 npm run test:integration   # real Postgres (propai_test): resets, migrates from empty, seeds twice, then tests
 npm run test:e2e           # Playwright against `npm run dev` (starts it if not running)
+npm run ai:eval            # assistant evaluation suite against the configured provider (demo model without a key)
+npm run ai:ask -- --as pm@demo.test "Which vendor has been the slowest this month?"   # ask from the terminal
 npm run lint && npm run typecheck && npm run build
 ```
 
@@ -152,9 +159,19 @@ See [`.env.example`](.env.example). Required: `DATABASE_URL`, `APP_ENCRYPTION_KE
 
 The in-memory rate limiter is per instance; run a single instance until the Redis adapter lands. With local file storage, also keep a single instance (or switch to `FILE_STORAGE=s3`).
 
-## AI and integrations configuration
+## AI configuration
 
-Not active yet. The provider abstraction (`AI_PROVIDER=demo|anthropic|openai|google|openai-compatible`, `AI_MODEL`) arrives in Iteration 6, with a clearly labelled demo mode that works without an API key. Integration adapters (Stripe, email/SMS providers, calendars, accounting) arrive in Iteration 10. See `docs/ai-architecture.md` and `docs/architecture.md` §10.
+The assistant works out of the box in **demo mode**: no language model, fixed rules route common questions to the same read-only tools, and answers are composed only from tool results. Every demo answer is labelled. To use a real model, set one provider in `.env`:
+
+| Provider | Settings |
+|---|---|
+| Anthropic | `ANTHROPIC_API_KEY=…` (optional `AI_MODEL`, default `claude-sonnet-5`; `ANTHROPIC_BASE_URL` for a gateway) |
+| OpenAI | `AI_PROVIDER=openai`, `OPENAI_API_KEY=…`, `AI_MODEL=…` |
+| OpenAI-compatible (Ollama, vLLM, LM Studio, gateways) | `AI_PROVIDER=openai-compatible`, `AI_COMPAT_BASE_URL=http://host:port/v1`, `AI_MODEL=…`, optional `AI_COMPAT_API_KEY` |
+
+The model must support tool calling. Limits: `AI_MAX_STEPS` (lookups per answer, default 6), `AI_TIMEOUT_MS` (60 s), `AI_MAX_OUTPUT_TOKENS`, `AI_REQUESTS_PER_MINUTE` per person (20) and `AI_MONTHLY_REQUEST_CAP` (the default per-organization cap; admins set their own under *Organization → AI assistant*). Cost estimates use a small built-in price table or `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK`; models without a price record tokens but no estimate. Prompts, tool results and record text are sent to the provider you configure, so choose one your customers' data agreements allow.
+
+Before switching models or changing prompts, run `npm run ai:eval` against the new configuration: it checks tool choice, permission compliance, refusal of actions, ambiguity handling and that every number in an answer appears in a tool result. Design notes: [`docs/ai-architecture.md`](docs/ai-architecture.md). Integration adapters (Stripe, email/SMS providers, calendars, accounting) arrive in Iteration 10.
 
 ## Rebranding
 

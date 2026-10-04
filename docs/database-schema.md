@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–5)
+## Implemented (Iterations 1–6)
 
 ### Identity & auth (🌐)
 
@@ -128,9 +128,20 @@ EXCLUDE USING gist (membership_id WITH =, tstzrange(starts_at, ends_at, '[)') WI
 
 Visitor check-in issues the parking permit in a savepoint, so "space just taken" (`23P01`) leaves the visitor untouched and shows a friendly error.
 
+### AI assistant (🔒, Iteration 6)
+
+| Table | Purpose / key columns |
+|---|---|
+| `ai_conversations` | owner `user_id`, `title` (first question), `mode` property/maintenance/frontdesk/facility/resident, `last_message_at`, `archived_at` (soft delete from the history list) |
+| `ai_messages` | provider-neutral transcript: `turn_id` (correlation id of one question), `seq` (unique per conversation), `role` user/assistant/tool, `content`, assistant `tool_calls` jsonb `[{id, name, input}]`, tool `tool_call_id`/`tool_name`/`is_error`, `provider`/`model` of assistant messages. `user_id` is denormalised so RLS can restrict rows to their author |
+| `ai_tool_calls` | the action log: user, conversation, `turn_id`, provider `call_id`, `tool`, `risk_class` (1 = read in this iteration), validated `args`, `outcome` ok/denied/invalid/not_found/ambiguous/error/unknown_tool, error, `summary`, `result_count`, `display` jsonb (the record cards the UI showed), `duration_ms` |
+| `ai_usage` | one row per question (`turn_id` unique): provider, model, input/output/cached tokens, `model_calls`, `tool_calls`, `est_cost_usd` (null when the model has no price), `latency_ms`, `outcome` ok/error/timeout/step_limit/cap_reached/disabled. Indexed by `(org_id, created_at)` for the monthly cap |
+
+Organization settings gained `aiEnabled` and `aiMonthlyRequestCap` (in `organizations.settings`). Sensitive reads by the assistant (the resident directory) also write an `audit_logs` row `ai.sensitive_read` with `ai_generated = true`.
+
 ### Full-text search
 
-Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades), `documents` (title, description) and `assets` (name, tag, make, model, serial, location, category). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
+Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades), `documents` (title, description) and `assets` (name, tag, make, model, serial, location, category). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input; hyphenated codes such as `RTU-4` match either joined (`rtu4`) or by part (`rtu & 4`), the way Postgres indexes them. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
 
 ### Indexes
 
@@ -160,6 +171,7 @@ current_setting('app.pass_token_hash')                      (public guest-pass p
 | `notification_preferences` | own rows only |
 | `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
 | Front desk & facility tables (`visitors`, `parking_*`, `vehicles`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` — 10 tables, migration `0011`) | same rule as the community tables. **Plus** `visitor_pass`: with no org context, a transaction that sets `app.pass_token_hash` may SELECT exactly the visitor row with that hash (the public pass page); it then switches to that org to read the building's public details |
+| AI tables (migration `0013`) | `ai_conversations`, `ai_messages`: **owner only** — `org_id = app_org() AND user_id = app_user()` for read and write; no platform-admin or worker bypass. `ai_tool_calls`, `ai_usage`: the standard tenant rule (admins read them through `ai.settings.manage` in the service) |
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
 
 Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 testing: inside org A, a user could see their own membership in org B. Covered by a regression test in `tests/integration/tenant-isolation.test.ts`.
@@ -168,7 +180,7 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 6–7 | `ai_conversations`, `ai_messages`, `ai_action_logs`, `ai_approvals`, `ai_policies`, `ai_usage` |
+| 7 | `ai_approvals` (action plans awaiting approval), `ai_policies` (per-org/property AI action policy) |
 | 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |
 | 9 | `workflows`, `workflow_runs`, `reports`, `scheduled_jobs` |
 | 10 | `plans`, `subscriptions`, `invoices`, `usage_records`, `api_keys`, `webhooks`, `webhook_deliveries`, `integrations`, `feature_flags` |

@@ -118,7 +118,7 @@ export function describeRules(r: AmenityRules): string[] {
   out.push(`${r.minDurationMinutes === r.maxDurationMinutes ? `${r.minDurationMinutes} minutes` : `${r.minDurationMinutes} min to ${r.maxDurationMinutes / 60} h`} per booking.`);
   if (r.minNoticeHours) out.push(`Book at least ${r.minNoticeHours} h ahead.`);
   out.push(`Bookings open ${r.maxAdvanceDays} days ahead.`);
-  if (r.capacity) out.push(`Up to ${r.capacity} people.`);
+  if (r.capacity) out.push(`Up to ${r.capacity} ${r.capacity === 1 ? "person" : "people"}.`);
   if (r.maxConcurrent > 1) out.push(`Shared: up to ${r.maxConcurrent} bookings at once.`);
   if (r.limitCount && r.limitPeriodDays) out.push(`Limit ${r.limitCount} per unit within ${r.limitPeriodDays} days.`);
   if (r.requiresApproval) out.push("Management approves each booking.");

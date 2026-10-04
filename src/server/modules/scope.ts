@@ -44,12 +44,19 @@ export function toPrefixQuery(q: string | null | undefined): string | null {
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .split(/[^a-z0-9@._-]+/)
-    // emails stay whole (Postgres indexes them as one token); everything else becomes alphanumerics
-    .map((t) => (t.includes("@") ? t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "") : t.replace(/[^a-z0-9]/g, "")))
+    // emails stay whole (Postgres indexes them as one token); everything else becomes alphanumerics.
+    // Hyphenated codes like "RTU-4" are indexed as "rtu-4", "rtu" and "4", so match either form.
+    .map((t) => {
+      if (t.includes("@")) return t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+      const parts = t.split(/[^a-z0-9]+/).filter(Boolean);
+      const joined = parts.join("");
+      if (parts.length > 1 && /[a-z]/.test(joined)) return `(${joined}:* | ${parts.map((x) => `${x}:*`).join(" & ")})`;
+      return joined;
+    })
     .filter(Boolean)
     .slice(0, 8);
   if (!terms.length) return null;
-  return terms.map((t) => `${t}:*`).join(" & ");
+  return terms.map((t) => (t.startsWith("(") ? t : `${t}:*`)).join(" & ");
 }
 
 // matches a generated tsvector column named "search" on the given table alias

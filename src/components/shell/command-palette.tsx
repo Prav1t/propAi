@@ -11,7 +11,7 @@ type Hit = { type: string; id: string; title: string; subtitle: string; href: st
 const TYPE_LABEL: Record<string, string> = { property: "Property", building: "Building", unit: "Unit", resident: "Resident", vendor: "Vendor", staff: "Staff" };
 
 // global Cmd/Ctrl-K palette: navigation + actions + permission-aware record search
-export function CommandPalette({ commands, search, searchPage }: { commands: Command[]; search: (q: string) => Promise<Hit[]>; searchPage: string }) {
+export function CommandPalette({ commands, search, searchPage, ask }: { commands: Command[]; search: (q: string) => Promise<Hit[]>; searchPage: string; ask?: { href: string; name: string } | null }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -56,7 +56,14 @@ export function CommandPalette({ commands, search, searchPage }: { commands: Com
     return (t ? commands.filter((c) => `${c.label} ${c.keywords ?? ""}`.toLowerCase().includes(t)) : commands).slice(0, 8);
   }, [q, commands]);
 
-  const items = [...filtered.map((c) => ({ key: `c:${c.href}`, label: c.label, sub: c.group, href: c.href })), ...hits.map((h) => ({ key: `h:${h.type}:${h.id}`, label: h.title, sub: `${TYPE_LABEL[h.type]} · ${h.subtitle}`, href: h.href }))];
+  // questions ("which vendor…?", "show overdue…") get an "Ask the assistant" option first
+  const question = q.trim();
+  const askItem = ask && question.length >= 3
+    ? [{ key: "ask", label: `Ask ${ask.name}: “${question.length > 60 ? `${question.slice(0, 57)}…` : question}”`, sub: "Assistant", href: `${ask.href}?q=${encodeURIComponent(question)}` }]
+    : [];
+  const looksLikeQuestion = /\?$|^(who|what|which|when|where|how|why|show|list|find|summari[sz]e|give|tell|is|are|do|does|any)\b/i.test(question);
+  const records = [...filtered.map((c) => ({ key: `c:${c.href}`, label: c.label, sub: c.group, href: c.href })), ...hits.map((h) => ({ key: `h:${h.type}:${h.id}`, label: h.title, sub: `${TYPE_LABEL[h.type]} · ${h.subtitle}`, href: h.href }))];
+  const items = looksLikeQuestion ? [...askItem, ...records] : [...records, ...askItem];
   const close = () => { setOpen(false); setQ(""); setHits([]); setActive(0); };
   const go = (href: string) => { close(); router.push(href); };
 

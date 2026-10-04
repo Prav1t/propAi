@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AskBox } from "@/components/ai/ask-box";
 import type { TenantCtx } from "@/server/modules/context";
 import type { Principal } from "@/server/authz/authorize";
 import { listMyUnits } from "@/server/modules/organizations/service";
@@ -73,6 +74,8 @@ export async function ResidentHome({ ctx, principal: p, first, base }: { ctx: Te
           ))}
         </nav>
       ) : null}
+
+      {p.permissions.has("ai.use") ? <AskBox base={base} placeholder="Ask about your home, packages or bookings" className="mb-6" /> : null}
 
       <div className="grid gap-6 lg:grid-cols-2 [&>*]:min-w-0">
         <Panel>

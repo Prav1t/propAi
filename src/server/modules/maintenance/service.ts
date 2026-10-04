@@ -83,14 +83,10 @@ export type WoListRow = {
   assigneeName: string | null; vendorName: string | null; resolveDueAt: Date | null; createdAt: Date; overdue: boolean;
 };
 
-export async function listWorkOrders(
-  ctx: TenantCtx,
-  opts: { view?: WoView; status?: string; propertyId?: string; category?: string; priority?: string; vendorId?: string; q?: string; page?: number; pageSize?: number },
-): Promise<Page<WoListRow>> {
-  const p = ctx.principal;
-  if (!canListWorkOrders(p)) throw new ForbiddenError();
-  const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize);
-  const now = new Date();
+export type WoListOpts = { view?: WoView; status?: string; propertyId?: string; buildingId?: string; unitId?: string; category?: string; priority?: string; vendorId?: string; q?: string; page?: number; pageSize?: number };
+
+// the filter behind the work order list (and its per-property counts): visibility first, then the requested view
+function woListWhere(p: Principal, opts: WoListOpts, now: Date): SQL | undefined {
   const view = opts.view ?? "open";
   const viewCond: Record<WoView, SQL | undefined> = {
     open: inArray(workOrders.status, OPEN_STATUSES),
@@ -103,18 +99,28 @@ export async function listWorkOrders(
   };
   const q = opts.q?.trim();
   const num = q ? Number(q.replace(/^wo-?/i, "")) : NaN;
+  return and(
+    eq(workOrders.orgId, p.orgId),
+    woVisibleWhere(p),
+    viewCond[view],
+    opts.status ? eq(workOrders.status, opts.status) : undefined,
+    opts.propertyId ? eq(workOrders.propertyId, opts.propertyId) : undefined,
+    opts.buildingId ? eq(workOrders.buildingId, opts.buildingId) : undefined,
+    opts.unitId ? eq(workOrders.unitId, opts.unitId) : undefined,
+    opts.category ? eq(workOrders.category, opts.category) : undefined,
+    opts.priority ? eq(workOrders.priority, opts.priority) : undefined,
+    opts.vendorId ? eq(workOrders.vendorId, opts.vendorId) : undefined,
+    q ? (Number.isInteger(num) && num > 0 ? eq(workOrders.number, num) : ilike(workOrders.title, `%${q.replace(/[%_\\]/g, "\\$&")}%`)) : undefined,
+  );
+}
+
+export async function listWorkOrders(ctx: TenantCtx, opts: WoListOpts): Promise<Page<WoListRow>> {
+  const p = ctx.principal;
+  if (!canListWorkOrders(p)) throw new ForbiddenError();
+  const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize);
+  const now = new Date();
   return tenantTx(ctx, async (tx) => {
-    const where = and(
-      eq(workOrders.orgId, p.orgId),
-      woVisibleWhere(p),
-      viewCond[view],
-      opts.status ? eq(workOrders.status, opts.status) : undefined,
-      opts.propertyId ? eq(workOrders.propertyId, opts.propertyId) : undefined,
-      opts.category ? eq(workOrders.category, opts.category) : undefined,
-      opts.priority ? eq(workOrders.priority, opts.priority) : undefined,
-      opts.vendorId ? eq(workOrders.vendorId, opts.vendorId) : undefined,
-      q ? (Number.isInteger(num) && num > 0 ? eq(workOrders.number, num) : ilike(workOrders.title, `%${q.replace(/[%_\\]/g, "\\$&")}%`)) : undefined,
-    );
+    const where = woListWhere(p, opts, now);
     const [{ n }] = await tx.select({ n: count() }).from(workOrders).where(where);
     const rows = await tx
       .select({
@@ -136,6 +142,16 @@ export async function listWorkOrders(
       .offset(offset);
     return toPage(rows.map((r) => ({ ...r, overdue: isOpen(r.status) && !!r.resolveDueAt && r.resolveDueAt < now })), n, page, pageSize);
   });
+}
+
+// how the same list splits by property (for summaries such as "17 overdue: Fraser Towers 9, Harbour Centre 5…")
+export async function workOrderCountsByProperty(ctx: TenantCtx, opts: WoListOpts): Promise<{ property: string; n: number }[]> {
+  const p = ctx.principal;
+  if (!canListWorkOrders(p)) throw new ForbiddenError();
+  return tenantTx(ctx, (tx) =>
+    tx.select({ property: properties.name, n: count() }).from(workOrders).innerJoin(properties, eq(properties.id, workOrders.propertyId))
+      .where(woListWhere(p, opts, new Date())).groupBy(properties.name).orderBy(desc(count()), asc(properties.name)),
+  );
 }
 
 /* ───────────── detail ───────────── */

@@ -137,7 +137,7 @@ export type VisitorListRow = {
 };
 
 // "today" = expected guests whose window is open now or later today (org time zone), plus nothing already finished
-export async function listVisitors(ctx: TenantCtx, opts: { view?: VisitorView; q?: string; buildingId?: string; page?: number; pageSize?: number }): Promise<Page<VisitorListRow>> {
+export async function listVisitors(ctx: TenantCtx, opts: { view?: VisitorView; q?: string; propertyId?: string; buildingId?: string; page?: number; pageSize?: number }): Promise<Page<VisitorListRow>> {
   const p = ctx.principal;
   if (!canUseVisitors(p)) throw new ForbiddenError();
   const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize ?? 50);
@@ -155,7 +155,7 @@ export async function listVisitors(ctx: TenantCtx, opts: { view?: VisitorView; q
   const q = opts.q?.trim();
   const like = q ? `%${q.replace(/[%_\\]/g, "\\$&")}%` : null;
   return tenantTx(ctx, async (tx) => {
-    const where = and(eq(visitors.orgId, p.orgId), visibleWhere(p), cond[view], opts.buildingId ? eq(visitors.buildingId, opts.buildingId) : undefined,
+    const where = and(eq(visitors.orgId, p.orgId), visibleWhere(p), cond[view], opts.buildingId ? eq(visitors.buildingId, opts.buildingId) : undefined, opts.propertyId ? eq(visitors.propertyId, opts.propertyId) : undefined,
       like ? or(ilike(visitors.name, like), ilike(visitors.company, like), sql`lower(${units.number}) = lower(${q})`, normalizePlate(q) ? eq(visitors.plate, normalizePlate(q)) : undefined) : undefined);
     const [{ n }] = await tx.select({ n: count() }).from(visitors).leftJoin(units, eq(units.id, visitors.unitId)).where(where);
     const rows = await tx.select({

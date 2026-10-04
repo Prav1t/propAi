@@ -15,6 +15,7 @@ import { listPackages, canUsePackages } from "@/server/modules/packages/service"
 import { bookingStats } from "@/server/modules/amenities/service";
 import { visitorStats } from "@/server/modules/visitors/service";
 import { parkingStats } from "@/server/modules/parking/service";
+import { BRAND } from "@/config/brand";
 
 export default async function OrgLayout({ children, params }: LayoutProps<"/o/[orgSlug]">) {
   const { orgSlug } = await params;
@@ -76,7 +77,8 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
           <div className="flex items-center gap-2">
             <MobileNav sections={sections} orgName={principal.orgName} roleName={principal.role.name} />
             <span className="hidden text-sm font-medium sm:inline lg:hidden">{principal.orgName}</span>
-            <CommandPalette commands={commands} search={searchAction.bind(null, orgSlug)} searchPage={`${base}/search`} />
+            <CommandPalette commands={commands} search={searchAction.bind(null, orgSlug)} searchPage={`${base}/search`}
+              ask={principal.permissions.has("ai.use") ? { href: `${base}/assistant`, name: BRAND.assistantName } : null} />
           </div>
           <div className="flex items-center gap-1">
           <Link href={`${base}/notifications`} className="relative inline-flex size-9 items-center justify-center rounded-[var(--radius-md)] text-muted hover:bg-subtle hover:text-fg"

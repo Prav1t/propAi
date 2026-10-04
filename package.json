@@ -16,7 +16,9 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
-    "worker": "tsx --conditions=react-server scripts/worker.ts"
+    "worker": "tsx --conditions=react-server scripts/worker.ts",
+    "ai:ask": "tsx --conditions=react-server scripts/ai-ask.ts",
+    "ai:eval": "tsx --conditions=react-server scripts/ai-eval.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1144.0",

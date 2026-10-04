@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { buildings, complaints, incidents, memberships, properties, units, users, COMPLAINT_CATEGORIES } from "../../db/schema";
 import { can, ForbiddenError, NotFoundError, type Principal } from "../../authz/authorize";
@@ -32,14 +32,19 @@ export const canUseComplaints = (p: Principal) => p.permissions.has("complaint.r
 
 export type ComplaintRow = { id: string; number: number; subject: string; category: string; status: string; priority: string; createdAt: Date; propertyName: string; unitNumber: string | null; assigneeName: string | null };
 
-export async function listComplaints(ctx: TenantCtx, opts: { view?: "open" | "all" | "resolved"; category?: string; propertyId?: string; page?: number }): Promise<Page<ComplaintRow>> {
+export async function listComplaints(ctx: TenantCtx, opts: { view?: "open" | "all" | "resolved"; category?: string; propertyId?: string; buildingId?: string; q?: string; since?: Date; until?: Date; page?: number; pageSize?: number }): Promise<Page<ComplaintRow>> {
   const p = ctx.principal;
   if (!canUseComplaints(p)) throw new ForbiddenError();
-  const { page, pageSize, offset } = pageArgs(opts.page);
+  const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize);
+  const q = opts.q?.trim();
+  const like = q ? `%${q.replace(/[%_\\]/g, "\\$&")}%` : null;
   const viewCond = { open: inArray(complaints.status, ["new", "acknowledged", "investigating"]), resolved: inArray(complaints.status, ["resolved", "closed", "dismissed"]), all: undefined }[opts.view ?? "open"];
   return tenantTx(ctx, async (tx) => {
     const where = and(eq(complaints.orgId, p.orgId), visibleWhere(p), viewCond,
-      opts.category ? eq(complaints.category, opts.category) : undefined, opts.propertyId ? eq(complaints.propertyId, opts.propertyId) : undefined);
+      opts.category ? eq(complaints.category, opts.category) : undefined, opts.propertyId ? eq(complaints.propertyId, opts.propertyId) : undefined,
+      opts.buildingId ? eq(complaints.buildingId, opts.buildingId) : undefined,
+      opts.since ? gte(complaints.createdAt, opts.since) : undefined, opts.until ? lt(complaints.createdAt, opts.until) : undefined,
+      like ? or(ilike(complaints.subject, like), ilike(complaints.description, like), sql`${complaints.category} = ${q!.toLowerCase()}`) : undefined);
     const [{ n }] = await tx.select({ n: count() }).from(complaints).where(where);
     const rows = await tx.select({
       id: complaints.id, number: complaints.number, subject: complaints.subject, category: complaints.category, status: complaints.status, priority: complaints.priority,

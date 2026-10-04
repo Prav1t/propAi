@@ -5,6 +5,7 @@ import { hashPassword } from "../src/server/auth/password";
 import { seedOps } from "./seed-ops";
 import { seedCommunity, seedFile } from "./seed-community";
 import { EXTRA_STAFF_DOMAIN, seedFacility, seedFacilityTenant } from "./seed-facility";
+import { seedAi } from "./seed-ai";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -246,6 +247,8 @@ async function main() {
     await tx.insert(s.notifications).values({ orgId: ns.id, userId: nsUser, kind: "workorder.created", title: "New request #1", href: `/o/northshore-strata/maintenance/${nsWo.id}`, entityType: "work_order", entityId: nsWo.id });
     await tx.insert(s.notificationPreferences).values({ orgId: ns.id, userId: nsUser, kind: "task.assigned", email: true, inApp: true });
     await tx.insert(s.outboxEvents).values({ orgId: ns.id, type: "workorder.created", payload: { workOrderId: nsWo.id }, processedAt: new Date() });
+    // one already-delivered event in the demo org too, so the outbox isolation checks never depend on test order
+    await tx.insert(s.outboxEvents).values({ orgId: pac.id, type: "seed.completed", payload: {}, processedAt: new Date() });
 
     // community rows in the second tenant too, so isolation tests cover every table
     const [nsAm] = await tx.insert(s.amenities).values({ orgId: ns.id, propertyId: nsProp.id, name: "Guest Lounge", kind: "lounge" }).returning();
@@ -272,6 +275,9 @@ async function main() {
     console.log(`✓ seeded 2 orgs, ${Object.keys(propIds).length + 1} properties, ${unitCount + 30} units, ${residentCount} residents, ${userRows.length} demo users`);
   });
   await pool.end();
+  // after the commit: the assistant runs through the app's own connection and permission checks
+  const ai = await seedAi();
+  console.log(`✓ assistant: ${ai.conversations} conversations, ${ai.toolCalls} tool calls (demo model)`);
 }
 
 main().catch((e) => {

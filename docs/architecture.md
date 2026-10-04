@@ -1,6 +1,6 @@
 # Architecture
 
-_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 5). Sections marked **(planned)** are not implemented yet._
+_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 6). Sections marked **(planned)** are not implemented yet._
 
 ## 1. Decisions at a glance
 
@@ -17,7 +17,7 @@ _Iteration 0 design, updated each iteration with what is actually built (last: I
 | Cache / rate limit | In-process limiter behind a `RateLimiter` interface now; Redis adapter when running >1 instance **(planned)** | Honest about current scale; interface avoids rewrite |
 | Files | `BlobStore` interface: local disk or S3-compatible object storage (AWS S3, MinIO, R2) with presigned URLs and a scanning hook (§9) | Portable across AWS/GCP/Azure/on-prem |
 | Email | `Mailer` interface: `console` (dev outbox table) and `smtp` providers; Resend/SendGrid adapters later | Works with zero config in dev; Mailpit in Docker |
-| AI | Provider abstraction (Anthropic / OpenAI / Google / local) + typed tool registry + policy engine **(Iterations 6–8)**; see `ai-architecture.md` | |
+| AI | `ChatModel` provider abstraction (Anthropic, OpenAI, any OpenAI-compatible server, demo) + typed, permission-filtered tool registry over the domain services + streamed orchestrator (Iteration 6, read-only); policy engine and approvals in Iteration 7; see `ai-architecture.md` | The model never touches the database; it can only call tools that run the same service code as the UI |
 | Deploy | Docker image (Next.js `standalone` output), Compose for dev; any container host in prod | Cloud-agnostic |
 
 ## 2. System context
@@ -34,7 +34,7 @@ _Iteration 0 design, updated each iteration with what is actually built (last: I
                                ├─ modules/*       domain services (org, property, …)
                                ├─ audit/          audit log writer
                                ├─ mail/           Mailer adapters
-                               └─ ai/             (planned) providers, tools, policy
+                               └─ ai/             providers, tool registry, orchestrator, usage/caps, eval
                                       │
                       ┌───────────────┼──────────────────┐
                  PostgreSQL 16     Object storage     SMTP / providers
@@ -127,6 +127,14 @@ The access rules are one function per record (`canReadDocument`, `documentVisibl
 
 New permissions: `visitor.invite`, `parking.use`, `shift.read` (59 total).
 
+### Assistant records (Iteration 6)
+
+| Record | Who | Rule |
+|---|---|---|
+| Conversations and transcripts (`ai_conversations`, `ai_messages`) | the author only | RLS requires both `org_id = app_org()` **and** `user_id = app_user()`; not even org admins or platform admins can read someone else's conversation |
+| Tool-call log (`ai_tool_calls`), usage (`ai_usage`) | org admins with `ai.settings.manage` | tenant RLS; shown on *Organization → AI assistant* |
+| What the assistant can read | the asking user's own permissions | `ai.use` gates the assistant; each tool declares the permissions it needs and the services re-check every record. Residents, staff without directory access and vendors (no `ai.use`) are never offered tools they can't use |
+
 ## 7. Security baseline
 
 Implemented in Iteration 1 unless marked planned:
@@ -194,6 +202,13 @@ service (one transaction)                 worker (system context)
 - **Assets, PM and downtime:** a work order can name the equipment and mark it out of service, which opens a downtime record and sets the asset `down`. Completing, closing or cancelling that work order closes the downtime and returns the asset to service. The asset page shows recorded facts only: reactive requests in 90 days, downtime hours, cost over 12 months, PM history.
 - **Unified calendar** (`calendar/service.ts`): merges scheduled work orders, inspections, PM due dates, bookings, visitors, shifts and task due dates into day/week/month/agenda views. Each source applies its own list visibility rule (the same predicates as the module pages), so residents see only their own bookings, guests and scheduled visits.
 - **Front desk console** (`/desk`, and the dashboard for concierge and security roles): pass scanner, expected and on-site visitors, packages, messages needing a reply, bookings, open incidents, the current shift with clock in/out and the last handoff, parking status with plate lookup.
+
+## 9c. Assistant (Iteration 6)
+
+- **Flow:** `POST /o/{org}/assistant/stream` (same-origin check, session, membership) → `runAssistantTurn()` streams newline-delimited JSON events (`start`, `status`, `tool_start`/`tool_end`, `text`, `notice`/`error`, `done`). The orchestrator checks the per-user rate limit and the organization's enable switch and monthly cap, stores the question, then loops model ↔ tools (step limit, timeout, one retry on overload) and writes the transcript, every tool call and a usage row.
+- **Tools** (`src/server/ai/tools/*`) are thin adapters over the module services, typed with Zod and converted to JSON Schema for providers. Free-text references (a property, building, unit, amenity or vendor name) are resolved only among records the user can see; several matches come back as `AMBIGUOUS` with options, so the assistant asks. Results carry a factual summary, compact items with links, and separately a *display* (record cards, metrics) that the UI renders from the data — never from model text.
+- **Providers:** fetch-based adapters for the Anthropic Messages API and Chat Completions (OpenAI and compatible servers), both streamed; selection by environment. Without a key the **demo model** plans tool calls with fixed rules and answers from tool results, and every answer is labelled.
+- **UI:** the *Assistant* page (history, modes, suggestions, streamed answer with a lookup trail and record cards, safe markdown with in-app links only), Cmd/Ctrl-K "Ask …", and an ask box on the dashboards. See `ai-architecture.md`.
 
 ## 10. Integrations (planned, Iteration 10)
 

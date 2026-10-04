@@ -42,7 +42,7 @@ function canSeeAmenity(p: Principal, a: AmenityRow) {
   return residentCanSee(p, a) && p.permissions.has("amenity.read");
 }
 
-function amenityVisibleWhere(p: Principal): SQL {
+export function amenityVisibleWhere(p: Principal): SQL {
   if (p.role.category === "staff") {
     if (!["amenity.read", "amenity.manage", "booking.manage"].some((x) => p.permissions.has(x))) return sql`false`;
     return scopeCondition(p, { property: amenities.propertyId, building: amenities.buildingId }) ?? sql`true`;
@@ -251,50 +251,57 @@ const isExclusionViolation = (e: unknown) => {
   return err?.code === "23P01" || err?.cause?.code === "23P01";
 };
 
+// the booking rules evaluated exactly as a real booking would be; shared by createBooking and previewBooking
+async function evaluateBookingTx(tx: Tx, ctx: TenantCtx, input: BookingInput, lock: boolean) {
+  const p = ctx.principal;
+  // serialize bookings per amenity so capacity checks can't race (exclusive ones also have a DB constraint)
+  const a = await loadAmenity(tx, p.orgId, input.amenityId, lock);
+  if (!canSeeAmenity(p, a)) throw new NotFoundError();
+  const staff = canManageBookings(p, a);
+  let unitId: string | null = null;
+  if (staff) {
+    if (input.unitNumber) {
+      const matches = await tx.select({ id: units.id, building: buildings.name }).from(units).innerJoin(buildings, eq(buildings.id, units.buildingId))
+        .where(and(eq(units.orgId, p.orgId), eq(units.propertyId, a.propertyId), a.buildingId ? eq(units.buildingId, a.buildingId) : undefined,
+          input.buildingId ? eq(units.buildingId, input.buildingId) : undefined, sql`lower(${units.number}) = lower(${input.unitNumber})`)).limit(5);
+      if (!matches.length) throw new ValidationError(`No unit ${input.unitNumber} at this amenity's ${a.buildingId ? "building" : "property"}.`, "unitNumber");
+      // never guess between towers that share unit numbers
+      if (matches.length > 1) throw new ValidationError(`Unit ${input.unitNumber} exists in ${matches.map((m) => m.building).join(" and ")} — choose the building.`, "buildingId");
+      unitId = matches[0].id;
+    }
+  } else {
+    if (!p.permissions.has("booking.create")) throw new ForbiddenError("Your role can't book amenities. Ask the primary resident of your unit.");
+    const mine = [...p.unitIds];
+    unitId = input.unitId && p.unitIds.has(input.unitId) ? input.unitId : mine.length === 1 ? mine[0] : null;
+    if (!unitId) throw new ValidationError("Choose which of your units this booking is for.", "unitId");
+    const [u] = await tx.select({ propertyId: units.propertyId, buildingId: units.buildingId }).from(units).where(eq(units.id, unitId));
+    if (!u || u.propertyId !== a.propertyId || (a.buildingId && a.buildingId !== u.buildingId)) throw new ForbiddenError("This amenity isn't available to your unit.");
+  }
+  const tz = await propertyTz(tx, a.propertyId);
+  const start = zonedToUtc(`${input.date}T${input.start.padStart(5, "0")}`, tz);
+  const end = new Date(start.getTime() + input.durationMinutes * 60_000);
+  if (Number.isNaN(start.getTime())) throw new ValidationError("Invalid start time.", "start");
+
+  const overlapping = await tx.select({ start: bookings.startsAt, end: bookings.endsAt }).from(bookings)
+    .where(and(eq(bookings.amenityId, a.id), inArray(bookings.status, [...LIVE]), lt(bookings.startsAt, end), gt(bookings.endsAt, start)));
+  const blackouts = await tx.select({ start: amenityBlackouts.startsAt, end: amenityBlackouts.endsAt, reason: amenityBlackouts.reason }).from(amenityBlackouts)
+    .where(and(eq(amenityBlackouts.amenityId, a.id), lt(amenityBlackouts.startsAt, end), gt(amenityBlackouts.endsAt, start)));
+  let unitBookingsInPeriod = 0;
+  if (unitId && a.limitPeriodDays) {
+    const span = a.limitPeriodDays * 86_400_000;
+    const [r] = await tx.select({ n: count() }).from(bookings).where(and(eq(bookings.amenityId, a.id), eq(bookings.unitId, unitId), inArray(bookings.status, [...LIVE]),
+      gt(bookings.startsAt, new Date(start.getTime() - span)), lt(bookings.startsAt, new Date(start.getTime() + span))));
+    unitBookingsInPeriod = r.n;
+  }
+  const decision = evaluateBooking(toRules(a), { start, end, guests: input.guests, roleKey: p.role.key, staff, now: new Date(), timeZone: tz }, { overlapping, blackouts, unitBookingsInPeriod });
+  return { a, staff, unitId, tz, start, end, decision };
+}
+
 export async function createBooking(ctx: TenantCtx, input: BookingInput) {
   const p = ctx.principal;
   try {
     return await tenantTx(ctx, async (tx) => {
-      // serialize bookings per amenity so capacity checks can't race (exclusive ones also have a DB constraint)
-      const a = await loadAmenity(tx, p.orgId, input.amenityId, true);
-      if (!canSeeAmenity(p, a)) throw new NotFoundError();
-      const staff = canManageBookings(p, a);
-      let unitId: string | null = null;
-      if (staff) {
-        if (input.unitNumber) {
-          const matches = await tx.select({ id: units.id, building: buildings.name }).from(units).innerJoin(buildings, eq(buildings.id, units.buildingId))
-            .where(and(eq(units.orgId, p.orgId), eq(units.propertyId, a.propertyId), a.buildingId ? eq(units.buildingId, a.buildingId) : undefined,
-              input.buildingId ? eq(units.buildingId, input.buildingId) : undefined, sql`lower(${units.number}) = lower(${input.unitNumber})`)).limit(5);
-          if (!matches.length) throw new ValidationError(`No unit ${input.unitNumber} at this amenity's ${a.buildingId ? "building" : "property"}.`, "unitNumber");
-          // never guess between towers that share unit numbers
-          if (matches.length > 1) throw new ValidationError(`Unit ${input.unitNumber} exists in ${matches.map((m) => m.building).join(" and ")} — choose the building.`, "buildingId");
-          unitId = matches[0].id;
-        }
-      } else {
-        if (!p.permissions.has("booking.create")) throw new ForbiddenError("Your role can't book amenities. Ask the primary resident of your unit.");
-        const mine = [...p.unitIds];
-        unitId = input.unitId && p.unitIds.has(input.unitId) ? input.unitId : mine.length === 1 ? mine[0] : null;
-        if (!unitId) throw new ValidationError("Choose which of your units this booking is for.", "unitId");
-        const [u] = await tx.select({ propertyId: units.propertyId, buildingId: units.buildingId }).from(units).where(eq(units.id, unitId));
-        if (!u || u.propertyId !== a.propertyId || (a.buildingId && a.buildingId !== u.buildingId)) throw new ForbiddenError("This amenity isn't available to your unit.");
-      }
-      const tz = await propertyTz(tx, a.propertyId);
-      const start = zonedToUtc(`${input.date}T${input.start.padStart(5, "0")}`, tz);
-      const end = new Date(start.getTime() + input.durationMinutes * 60_000);
-      if (Number.isNaN(start.getTime())) throw new ValidationError("Invalid start time.", "start");
-
-      const overlapping = await tx.select({ start: bookings.startsAt, end: bookings.endsAt }).from(bookings)
-        .where(and(eq(bookings.amenityId, a.id), inArray(bookings.status, [...LIVE]), lt(bookings.startsAt, end), gt(bookings.endsAt, start)));
-      const blackouts = await tx.select({ start: amenityBlackouts.startsAt, end: amenityBlackouts.endsAt, reason: amenityBlackouts.reason }).from(amenityBlackouts)
-        .where(and(eq(amenityBlackouts.amenityId, a.id), lt(amenityBlackouts.startsAt, end), gt(amenityBlackouts.endsAt, start)));
-      let unitBookingsInPeriod = 0;
-      if (unitId && a.limitPeriodDays) {
-        const span = a.limitPeriodDays * 86_400_000;
-        const [r] = await tx.select({ n: count() }).from(bookings).where(and(eq(bookings.amenityId, a.id), eq(bookings.unitId, unitId), inArray(bookings.status, [...LIVE]),
-          gt(bookings.startsAt, new Date(start.getTime() - span)), lt(bookings.startsAt, new Date(start.getTime() + span))));
-        unitBookingsInPeriod = r.n;
-      }
-      const decision = evaluateBooking(toRules(a), { start, end, guests: input.guests, roleKey: p.role.key, staff, now: new Date(), timeZone: tz }, { overlapping, blackouts, unitBookingsInPeriod });
+      const { a, staff, unitId, start, end, decision } = await evaluateBookingTx(tx, ctx, input, true);
       if (!decision.ok) throw new BookingRulesError(decision.problems.map((x) => x.message).join("\n"));
 
       const number = await nextNumber(tx, p.orgId, "booking");
@@ -315,6 +322,14 @@ export async function createBooking(ctx: TenantCtx, input: BookingInput) {
   }
 }
 
+// dry run: would this booking be accepted right now, and on what terms? (nothing is written)
+export async function previewBooking(ctx: TenantCtx, input: BookingInput) {
+  return tenantTx(ctx, async (tx) => {
+    const { a, staff, start, end, tz, decision } = await evaluateBookingTx(tx, ctx, input, false);
+    return { amenity: { id: a.id, name: a.name, propertyId: a.propertyId }, staff, start, end, tz, decision, rules: describeRules(toRules(a)) };
+  });
+}
+
 function bookingVisibleWhere(p: Principal): SQL {
   if (p.role.category === "staff") {
     if (!p.permissions.has("booking.manage") && !p.permissions.has("amenity.read")) return sql`false`;
@@ -327,7 +342,7 @@ function bookingVisibleWhere(p: Principal): SQL {
 export type BookingView = "upcoming" | "pending" | "past" | "cancelled" | "all";
 export type BookingListRow = { id: string; number: number; amenityId: string; amenityName: string; propertyName: string; unitNumber: string | null; startsAt: Date; endsAt: Date; status: string; guests: number; bookedBy: string | null; feeCents: number; depositCents: number; feeStatus: string; depositStatus: string; tz: string };
 
-export async function listBookings(ctx: TenantCtx, opts: { view?: BookingView; amenityId?: string; propertyId?: string; page?: number; pageSize?: number }): Promise<Page<BookingListRow>> {
+export async function listBookings(ctx: TenantCtx, opts: { view?: BookingView; amenityId?: string; propertyId?: string; buildingId?: string; from?: Date; to?: Date; page?: number; pageSize?: number }): Promise<Page<BookingListRow>> {
   const p = ctx.principal;
   const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize);
   const now = new Date();
@@ -340,7 +355,8 @@ export async function listBookings(ctx: TenantCtx, opts: { view?: BookingView; a
     all: undefined,
   };
   return tenantTx(ctx, async (tx) => {
-    const where = and(eq(bookings.orgId, p.orgId), bookingVisibleWhere(p), cond[view], opts.amenityId ? eq(bookings.amenityId, opts.amenityId) : undefined, opts.propertyId ? eq(bookings.propertyId, opts.propertyId) : undefined);
+    const where = and(eq(bookings.orgId, p.orgId), bookingVisibleWhere(p), cond[view], opts.amenityId ? eq(bookings.amenityId, opts.amenityId) : undefined, opts.propertyId ? eq(bookings.propertyId, opts.propertyId) : undefined,
+      opts.buildingId ? eq(bookings.buildingId, opts.buildingId) : undefined, opts.to ? lt(bookings.startsAt, opts.to) : undefined, opts.from ? gt(bookings.endsAt, opts.from) : undefined);
     const [{ n }] = await tx.select({ n: count() }).from(bookings).where(where);
     const rows = await tx.select({
       id: bookings.id, number: bookings.number, amenityId: bookings.amenityId, amenityName: amenities.name, propertyName: properties.name, unitNumber: units.number,

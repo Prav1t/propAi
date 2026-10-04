@@ -1535,3 +1535,114 @@ export const assetDowntime = pgTable(
     check("asset_downtime_window_ck", sql`${t.endedAt} is null or ${t.endedAt} >= ${t.startedAt}`),
   ],
 );
+
+/* ───────────────────────── AI assistant (Iteration 6) ───────────────────────── */
+
+export const AI_MODES = ["property", "maintenance", "frontdesk", "facility", "resident"] as const;
+export const AI_TOOL_OUTCOMES = ["ok", "denied", "invalid", "not_found", "ambiguous", "error", "unknown_tool"] as const;
+export const AI_USAGE_OUTCOMES = ["ok", "error", "timeout", "step_limit", "cap_reached", "disabled"] as const;
+
+// a user's private conversation with the assistant (RLS: own org AND own user)
+export const aiConversations = pgTable(
+  "ai_conversations",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default("New conversation"),
+    mode: text("mode").notNull().default("property"),
+    lastMessageAt: ts("last_message_at").notNull().defaultNow(),
+    archivedAt: ts("archived_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("ai_conversations_user_idx").on(t.orgId, t.userId, t.lastMessageAt),
+    check("ai_conversations_mode_ck", sql`${t.mode} in ('property','maintenance','frontdesk','facility','resident')`),
+  ],
+);
+
+// provider-neutral transcript: user text, assistant text + tool calls, tool results (as given to the model)
+export const aiMessages = pgTable(
+  "ai_messages",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").notNull().references(() => aiConversations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    turnId: uuid("turn_id").notNull(), // correlation id shared by everything one user message caused
+    seq: integer("seq").notNull(),
+    role: text("role").notNull(),
+    content: text("content").notNull().default(""),
+    toolCalls: jsonb("tool_calls"), // assistant: [{ id, name, input }]
+    toolCallId: text("tool_call_id"), // tool: the call this result answers
+    toolName: text("tool_name"),
+    isError: boolean("is_error").notNull().default(false),
+    provider: text("provider"),
+    model: text("model"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("ai_messages_seq_uq").on(t.conversationId, t.seq),
+    index("ai_messages_turn_idx").on(t.conversationId, t.turnId),
+    check("ai_messages_role_ck", sql`${t.role} in ('user','assistant','tool')`),
+  ],
+);
+
+// every tool the assistant ran: who, what arguments, outcome, how long, what the UI showed
+export const aiToolCalls = pgTable(
+  "ai_tool_calls",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    conversationId: uuid("conversation_id").references(() => aiConversations.id, { onDelete: "set null" }),
+    turnId: uuid("turn_id").notNull(),
+    callId: text("call_id").notNull(),
+    tool: text("tool").notNull(),
+    riskClass: integer("risk_class").notNull().default(1),
+    args: jsonb("args").notNull().default({}),
+    outcome: text("outcome").notNull(),
+    errorMessage: text("error_message"),
+    summary: text("summary"),
+    resultCount: integer("result_count"),
+    display: jsonb("display"), // record cards / metrics rendered from the tool result, never from model text
+    durationMs: integer("duration_ms").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("ai_tool_calls_org_idx").on(t.orgId, t.createdAt),
+    index("ai_tool_calls_turn_idx").on(t.conversationId, t.turnId),
+    check("ai_tool_calls_outcome_ck", sql`${t.outcome} in ('ok','denied','invalid','not_found','ambiguous','error','unknown_tool')`),
+    check("ai_tool_calls_risk_ck", sql`${t.riskClass} between 1 and 5`),
+  ],
+);
+
+// one row per assistant request: tokens, estimated cost, outcome (drives caps and the usage page)
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    conversationId: uuid("conversation_id").references(() => aiConversations.id, { onDelete: "set null" }),
+    turnId: uuid("turn_id").notNull(),
+    feature: text("feature").notNull().default("chat"),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+    modelCalls: integer("model_calls").notNull().default(0),
+    toolCalls: integer("tool_calls").notNull().default(0),
+    estCostUsd: numeric("est_cost_usd", { precision: 12, scale: 6 }),
+    latencyMs: integer("latency_ms").notNull().default(0),
+    outcome: text("outcome").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("ai_usage_org_idx").on(t.orgId, t.createdAt),
+    index("ai_usage_user_idx").on(t.orgId, t.userId, t.createdAt),
+    uniqueIndex("ai_usage_turn_uq").on(t.turnId),
+    check("ai_usage_outcome_ck", sql`${t.outcome} in ('ok','error','timeout','step_limit','cap_reached','disabled')`),
+  ],
+);

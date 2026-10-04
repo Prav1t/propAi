@@ -15,6 +15,10 @@ describe("toPrefixQuery", () => {
     expect(toPrefixQuery("emma@demo.test")).toBe("emma@demo.test:*");
     expect(toPrefixQuery("604-555")).toBe("604555:*");
   });
+  it("matches hyphenated codes either joined or by part", () => {
+    expect(toPrefixQuery("RTU-4")).toBe("(rtu4:* | rtu:* & 4:*)");
+    expect(toPrefixQuery("unit B-12 lobby")).toBe("unit:* & (b12:* | b:* & 12:*) & lobby:*");
+  });
   it("caps the number of terms", () => {
     expect(toPrefixQuery("a b c d e f g h i j")!.split("&")).toHaveLength(8);
   });

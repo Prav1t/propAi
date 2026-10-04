@@ -83,7 +83,7 @@ export async function logPackage(ctx: TenantCtx, input: PackageInput, photos: Fi
 export type PackageView = "waiting" | "overdue" | "picked_up" | "returned" | "all";
 export type PackageListRow = { id: string; unitNumber: string; buildingName: string; propertyName: string; recipientName: string | null; carrier: string | null; trackingNumber: string | null; size: string; perishable: boolean; shelfLocation: string | null; status: string; receivedAt: Date; pickedUpAt: Date | null; pickedUpByName: string | null; pickupCode: string | null; photos: number };
 
-export async function listPackages(ctx: TenantCtx, opts: { view?: PackageView; q?: string; propertyId?: string; buildingId?: string; page?: number; pageSize?: number }): Promise<Page<PackageListRow>> {
+export async function listPackages(ctx: TenantCtx, opts: { view?: PackageView; q?: string; propertyId?: string; buildingId?: string; unitId?: string; receivedBefore?: Date; page?: number; pageSize?: number }): Promise<Page<PackageListRow>> {
   const p = ctx.principal;
   if (!canUsePackages(p)) throw new ForbiddenError();
   const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize ?? 50);
@@ -102,6 +102,7 @@ export async function listPackages(ctx: TenantCtx, opts: { view?: PackageView; q
   return tenantTx(ctx, async (tx) => {
     const where = and(eq(packages.orgId, p.orgId), visibleWhere(p), cond[view],
       opts.propertyId ? eq(packages.propertyId, opts.propertyId) : undefined, opts.buildingId ? eq(packages.buildingId, opts.buildingId) : undefined,
+      opts.unitId ? eq(packages.unitId, opts.unitId) : undefined, opts.receivedBefore ? lt(packages.receivedAt, opts.receivedBefore) : undefined,
       like ? or(sql`lower(${units.number}) = lower(${q})`, ilike(packages.recipientName, like), ilike(packages.trackingNumber, `%${normalizeTracking(q!)}%`), eq(packages.pickupCode, q!)) : undefined);
     const [{ n }] = await tx.select({ n: count() }).from(packages).innerJoin(units, eq(units.id, packages.unitId)).where(where);
     const rows = await tx.select({

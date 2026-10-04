@@ -76,15 +76,17 @@ export type ResidentRow = {
 
 export async function listResidents(
   ctx: TenantCtx,
-  opts: { q?: string; propertyId?: string; relationship?: string; status?: "current" | "past" | "all"; page?: number },
+  opts: { q?: string; propertyId?: string; buildingId?: string; unitId?: string; relationship?: string; status?: "current" | "past" | "all"; page?: number; pageSize?: number },
 ): Promise<Page<ResidentRow>> {
   const p = ctx.principal;
   authorize(p, "resident.read");
-  const { page, pageSize, offset } = pageArgs(opts.page);
+  const { page, pageSize, offset } = pageArgs(opts.page, opts.pageSize);
   const tsq = toPrefixQuery(opts.q);
   const status = opts.status ?? "current";
   const occFilter = and(
     opts.propertyId ? sql`u.property_id = ${opts.propertyId}` : undefined,
+    opts.buildingId ? sql`u.building_id = ${opts.buildingId}` : undefined,
+    opts.unitId ? sql`u.id = ${opts.unitId}` : undefined,
     opts.relationship && (RELATIONSHIPS as readonly string[]).includes(opts.relationship) ? sql`o.relationship = ${opts.relationship}` : undefined,
   );
   const hasCurrent = sql`exists (select 1 from unit_occupancies o join units u on u.id = o.unit_id where o.resident_id = residents.id

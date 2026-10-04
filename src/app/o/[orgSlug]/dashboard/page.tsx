@@ -5,6 +5,7 @@ import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th 
 import { describeAudit } from "@/lib/audit-labels";
 import { BarList } from "@/components/ops/bar-list";
 import { WoMiniList } from "@/components/ops/wo-mini-list";
+import { AskBox } from "@/components/ai/ask-box";
 import { listWorkOrders, canListWorkOrders } from "@/server/modules/maintenance/service";
 import { listTasks, canUseTasks } from "@/server/modules/tasks/service";
 import { getOpsKpis } from "@/server/modules/ops/kpis";
@@ -70,6 +71,7 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
         title={`Good to see you, ${first}`}
         description={scoped ? `Showing the ${stats.properties === 1 ? "property" : "properties"} assigned to you as ${principal.role.name}.` : `Portfolio overview for ${principal.orgName}.`}
       />
+      {principal.permissions.has("ai.use") ? <AskBox base={base} placeholder="Ask anything — “Which work orders are overdue at Fraser Towers?”" className="mb-6" /> : null}
       {wo ? (
         <section aria-labelledby="ops-h" className="mb-6">
           <h2 id="ops-h" className="sr-only">Operations</h2>

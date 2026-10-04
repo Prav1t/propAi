@@ -8,7 +8,9 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   "amenities", "amenity_blackouts", "bookings", "packages", "announcements", "announcement_reads", "message_threads", "messages", "message_reads",
   "message_templates", "documents", "document_versions",
   // iteration 5: front desk & facility
-  "visitors", "parking_spaces", "vehicles", "parking_permits", "parking_violations", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime"];
+  "visitors", "parking_spaces", "vehicles", "parking_permits", "parking_violations", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
+  // iteration 6: AI assistant
+  "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
 
 let A: string; // Pacific Properties
@@ -56,7 +58,8 @@ describe("reads", () => {
     expect(rows[0].n).toBe(2);
   });
   it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents",
-    "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime"])("%s: no context sees nothing", async (table) => {
+    "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
+    "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage"])("%s: no context sees nothing", async (table) => {
     await asApp({}, async (q) => {
       const { rows } = await q(`select count(*)::int as n from ${table}`);
       expect(rows[0].n).toBe(0);
@@ -70,6 +73,21 @@ describe("reads", () => {
     });
     const { rows } = await ownerPool.query("select count(*)::int n from notifications where org_id = $1 and user_id <> $2", [A, pm]);
     expect(rows[0].n).toBeGreaterThan(0);
+  });
+  it.each(["ai_conversations", "ai_messages"])("%s: private to their author, even inside the org and for platform admins", async (table) => {
+    const pm = await userIdByEmail("pm@demo.test");
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      expect((await q(`select count(*)::int n from ${table} where user_id <> $1`, [adminId])).rows[0].n).toBe(0);
+    });
+    await asApp({ orgId: A, userId: pm }, async (q) => {
+      expect((await q(`select count(*)::int n from ${table}`)).rows[0].n).toBeGreaterThan(0);
+      await expect(q(`insert into ai_conversations (org_id, user_id, title) values ($1, $2, 'x')`, [A, adminId])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ platformAdmin: true }, async (q) => {
+      expect((await q(`select count(*)::int n from ${table}`)).rows[0].n).toBe(0);
+    });
+    const { rows } = await ownerPool.query(`select count(distinct user_id)::int n from ${table} where org_id = $1`, [A]);
+    expect(rows[0].n).toBeGreaterThan(1);
   });
   it("outbox: org context enqueues only for itself; the worker's system context reads across orgs", async () => {
     await asApp({ orgId: A, userId: adminId }, async (q) => {

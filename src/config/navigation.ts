@@ -10,7 +10,10 @@ export type NavSection = { title?: string; items: NavItem[] };
 
 // only modules that are actually built are listed; later iterations append here
 export const NAV: NavSection[] = [
-  { items: [{ label: "Dashboard", href: (s) => `/o/${s}/dashboard`, icon: "home" }] },
+  { items: [
+    { label: "Dashboard", href: (s) => `/o/${s}/dashboard`, icon: "home" },
+    { label: "Assistant", href: (s) => `/o/${s}/assistant`, anyOf: ["ai.use"], icon: "sparkle" },
+  ] },
   {
     title: "Operations",
     items: [
@@ -59,6 +62,7 @@ export const NAV: NavSection[] = [
       { label: "General", href: (s) => `/o/${s}/settings`, anyOf: ["org.settings.manage"], icon: "settings" },
       { label: "Members", href: (s) => `/o/${s}/settings/members`, anyOf: ["member.read"], icon: "users" },
       { label: "Maintenance rules", href: (s) => `/o/${s}/settings/maintenance`, anyOf: ["workorder.configure"], icon: "sliders" },
+      { label: "AI assistant", href: (s) => `/o/${s}/settings/ai`, anyOf: ["ai.settings.manage"], icon: "sparkle" },
       { label: "Roles", href: (s) => `/o/${s}/settings/roles`, anyOf: ["role.read"], icon: "shield" },
       { label: "Audit log", href: (s) => `/o/${s}/settings/audit`, anyOf: ["audit.read"], icon: "list" },
     ],
