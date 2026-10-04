@@ -1,17 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
-import { signIn, signOut } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { reloadUntil, signIn, signOut } from "./helpers";
 
 // 1×1 PNG
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 
-// notifications are delivered just after the response; poll briefly instead of sleeping
-async function reloadUntil(page: Page, check: () => Promise<boolean>, tries = 10) {
-  for (let i = 0; i < tries; i++) {
-    if (await check()) return;
-    await page.waitForTimeout(500);
-    await page.reload();
-  }
-}
 
 test("maintenance vertical slice: resident submits → manager assigns vendor → vendor completes → resident is notified", async ({ page }) => {
   const tag = `E2E-${Math.random().toString(36).slice(2, 7)}`;

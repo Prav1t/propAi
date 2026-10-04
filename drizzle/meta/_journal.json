@@ -57,6 +57,20 @@
       "when": 1790819874893,
       "tag": "0007_notifications_insert",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791089129566,
+      "tag": "0008_community",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791089130566,
+      "tag": "0009_rls_community",
+      "breakpoints": true
     }
   ]
 }

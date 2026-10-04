@@ -40,8 +40,7 @@ test("platform admin console is invisible to org admins", async ({ page }) => {
 test("resident sees only their home on mobile @mobile", async ({ page }) => {
   await signIn(page, "resident@demo.test");
   await page.goto("/o/pacific-properties/dashboard");
-  await expect(page.getByText("Unit 1204")).toBeVisible();
-  await expect(page.getByText("Tower B · Fraser Towers")).toBeVisible();
+  await expect(page.getByText("Unit 1204 · Tower B, Fraser Towers")).toBeVisible();
   const res = await page.goto("/o/pacific-properties/settings/members");
   expect(res?.status()).toBe(404);
 });

@@ -1,14 +1,15 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
+import { useId, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 const control =
   "block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 h-9 text-sm text-fg placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 aria-[invalid=true]:border-danger";
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+// React 19: ref is a plain prop and passes through
+export function Input({ className, ...props }: ComponentProps<"input">) {
   return <input className={cn(control, className)} {...props} />;
 }
 
-export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ className, children, ...props }: ComponentProps<"select">) {
   return (
     <select className={cn(control, "pr-8", className)} {...props}>
       {children}
@@ -52,7 +53,7 @@ export function FormAlert({ kind = "error", children }: { kind?: "error" | "succ
     info: "bg-accent-soft text-accent border-accent/20",
   }[kind];
   return (
-    <div role={kind === "error" ? "alert" : "status"} className={cn("rounded-[var(--radius-md)] border px-3 py-2 text-[13px]", styles)}>
+    <div role={kind === "error" ? "alert" : "status"} className={cn("whitespace-pre-line rounded-[var(--radius-md)] border px-3 py-2 text-[13px]", styles)}>
       {children}
     </div>
   );

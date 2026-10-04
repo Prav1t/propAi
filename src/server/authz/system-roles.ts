@@ -48,7 +48,8 @@ export const SYSTEM_ROLES: SystemRole[] = [
     description: "Runs day-to-day operations of assigned buildings.",
     permissions: [...OPS_READ, "workorder.manage", "workorder.create", "task.manage", "inspection.manage",
       "incident.create", "incident.manage", "complaint.manage", "booking.manage", "package.manage", "visitor.manage",
-      "parking.manage", "announcement.manage", "shift.manage", "resident.manage", "analytics.read"],
+      "parking.manage", "announcement.manage", "shift.manage", "resident.manage", "analytics.read",
+      "amenity.manage", "document.manage", "message.manage"],
   },
   {
     key: "facility_manager", name: "Facility Manager", category: "staff", scopeLevel: "scoped",
@@ -74,7 +75,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
     description: "Front desk: packages, visitors, resident questions, shift logs.",
     permissions: ["org.read", "property.read", "unit.read", "resident.read", "workorder.create", "task.read",
       "incident.read", "incident.create", "complaint.create", "amenity.read", "booking.manage", "package.manage",
-      "visitor.manage", "parking.manage", "announcement.read", "document.read", "shift.manage", "message.use", "ai.use"],
+      "visitor.manage", "parking.manage", "announcement.read", "document.read", "shift.manage", "message.use", "message.manage", "ai.use"],
   },
   {
     key: "security", name: "Security", category: "staff", scopeLevel: "scoped",

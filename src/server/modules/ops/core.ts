@@ -45,5 +45,10 @@ export async function emit(tx: Tx, ctx: TenantCtx, type: string, payload: Record
   await tx.insert(outboxEvents).values({ orgId: ctx.principal.orgId, type, payload, actorUserId: ctx.principal.userId });
 }
 
+// events raised by the background worker (no acting user)
+export async function emitSystem(tx: Tx, orgId: string, type: string, payload: Record<string, unknown>) {
+  await tx.insert(outboxEvents).values({ orgId, type, payload, actorUserId: null });
+}
+
 // add/subtract minutes
 export const addMinutes = (d: Date, m: number) => new Date(d.getTime() + m * 60_000);

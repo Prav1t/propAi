@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { Logo } from "@/components/brand/logo";
 import { Icon } from "./icons";
 
-export type SidebarSection = { title?: string; items: { label: string; href: string; icon: string }[] };
+export type SidebarSection = { title?: string; items: { label: string; href: string; icon: string; badge?: number }[] };
 
 function NavLinks({ sections, onNavigate }: { sections: SidebarSection[]; onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -31,7 +31,8 @@ function NavLinks({ sections, onNavigate }: { sections: SidebarSection[]; onNavi
                   )}
                 >
                   <Icon name={item.icon} />
-                  {item.label}
+                  <span className="flex-1">{item.label}</span>
+                  {item.badge ? <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold tabular-nums text-accent-fg" aria-label={`${item.badge} new`}>{item.badge > 99 ? "99+" : item.badge}</span> : null}
                 </Link>
               </li>
             ))}

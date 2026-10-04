@@ -41,11 +41,17 @@ export class LocalBlobStore implements BlobStore {
 
 export class S3BlobStore implements BlobStore {
   private client: S3Client;
-  constructor(private bucket: string, opts: { endpoint?: string; region: string; forcePathStyle: boolean }) {
+  private signer: S3Client;
+  private sse: "AES256" | undefined;
+  constructor(private bucket: string, opts: { endpoint?: string; publicEndpoint?: string; region: string; forcePathStyle: boolean; sse?: string }) {
     this.client = new S3Client({ region: opts.region, endpoint: opts.endpoint, forcePathStyle: opts.forcePathStyle });
+    // presigning is offline; a separate public endpoint lets the browser reach a bucket the app talks to over a private network
+    this.signer = opts.publicEndpoint ? new S3Client({ region: opts.region, endpoint: opts.publicEndpoint, forcePathStyle: opts.forcePathStyle }) : this.client;
+    // SSE-S3 by default; MinIO without a KMS rejects it, so S3_SSE=none turns it off for local stacks
+    this.sse = opts.sse === "none" ? undefined : "AES256";
   }
   async put(key: string, bytes: Uint8Array, contentType: string) {
-    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType, ServerSideEncryption: "AES256" }));
+    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType, ServerSideEncryption: this.sse }));
   }
   async get(key: string) {
     const r = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
@@ -56,18 +62,19 @@ export class S3BlobStore implements BlobStore {
   }
   async signedUrl(key: string, filename: string, inline: boolean, ttlSeconds: number) {
     const disposition = `${inline ? "inline" : "attachment"}; filename="${filename.replace(/[^\w.-]/g, "_")}"`;
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key, ResponseContentDisposition: disposition }), { expiresIn: ttlSeconds });
+    return getSignedUrl(this.signer, new GetObjectCommand({ Bucket: this.bucket, Key: key, ResponseContentDisposition: disposition }), { expiresIn: ttlSeconds });
   }
 }
 
-// FILE_STORAGE=local (default, ./.data/uploads) or s3 (S3_BUCKET, S3_REGION, optional S3_ENDPOINT for MinIO/R2)
+// FILE_STORAGE=local (default, ./.data/uploads) or s3 (S3_BUCKET, S3_REGION, optional S3_ENDPOINT / S3_PUBLIC_ENDPOINT for MinIO/R2)
 const g = globalThis as unknown as { __blobStore?: BlobStore };
 export function blobStore(): BlobStore {
   if (!g.__blobStore) {
     if (process.env.FILE_STORAGE === "s3") {
       if (!process.env.S3_BUCKET) throw new Error("S3_BUCKET is required when FILE_STORAGE=s3");
       g.__blobStore = new S3BlobStore(process.env.S3_BUCKET, {
-        region: process.env.S3_REGION ?? "us-east-1", endpoint: process.env.S3_ENDPOINT || undefined, forcePathStyle: !!process.env.S3_ENDPOINT,
+        region: process.env.S3_REGION ?? "us-east-1", endpoint: process.env.S3_ENDPOINT || undefined, publicEndpoint: process.env.S3_PUBLIC_ENDPOINT || undefined,
+        forcePathStyle: !!process.env.S3_ENDPOINT, sse: process.env.S3_SSE,
       });
     } else {
       g.__blobStore = new LocalBlobStore(process.env.FILE_STORAGE_DIR ?? path.join(process.cwd(), ".data", "uploads"));

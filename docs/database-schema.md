@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–3)
+## Implemented (Iterations 1–4)
 
 ### Identity & auth (🌐)
 
@@ -72,9 +72,37 @@ Also added in Iteration 2: `memberships.vendor_id` (links vendor users to their 
 | `notification_preferences` | per user × kind: in-app, email |
 | `outbox_events` | type, payload, actor, attempts, last error, processed_at (partial index on unprocessed rows) |
 
+### Community & resident experience (🔒, Iteration 4)
+
+| Table | Purpose / key columns |
+|---|---|
+| `amenities` | property (optionally one building), name, kind, description, location, house rules text; booking rules as columns: `opens_at_minute`/`closes_at_minute` (minutes after local midnight; 1440 = midnight), `slot_minutes`, min/max duration, `min_notice_hours`, `max_advance_days`, `capacity` (people), `max_concurrent` (1 = exclusive), per-unit `limit_count` per `limit_period_days`, `cancellation_hours`, `requires_approval`, `fee_cents`, `deposit_cents`, `eligible_roles text[]` (empty = any resident), active |
+| `amenity_blackouts` | closures for an amenity: `starts_at`/`ends_at`, reason, creator |
+| `bookings` | per-org `number`; amenity, property/building/unit, resident, booker; `starts_at`/`ends_at`; guests, purpose; `status` requested/approved/declined/cancelled; `exclusive` (copied from the amenity when booked); fee/deposit amounts and statuses (fee: none/due/paid/waived; deposit: none/due/held/refunded/withheld); decision note/by/at; cancellation; damage notes + `damage_work_order_id` |
+| `packages` | property/building/unit, matched resident, recipient name, carrier, tracking, size, perishable, shelf, notes, `status` waiting/picked_up/returned, 6-digit `pickup_code`, received at/by, picked up at/by name, released by, `reminder_sent_at`, return reason (photos and signatures live in `files`) |
+| `announcements` | property (null = every property), `building_ids uuid[]` (empty = whole property), `audience` everyone/residents/staff, title, body, category, pinned, `notify`, `status` draft/scheduled/published/archived, `publish_at`, `published_at`, `expires_at` |
+| `announcement_reads` | read receipts per announcement × user (unique) |
+| `message_threads` | resident ↔ management conversation: property/building/unit, resident, `resident_user_id`, subject, category, status open/closed, assigned membership, `last_message_at`, `last_message_preview`, `last_from_staff` |
+| `messages` | thread, author, `from_staff`, `internal` (staff-only note), body |
+| `message_reads` | per thread × user `last_read_at` (unread badges) |
+| `message_templates` | reusable replies with `{{variables}}`; property null = org-wide |
+| `documents` | property/building/unit scope (all null = org-wide), title, description, category, `audience` staff/residents/owners, `important`, status active/archived, `current_version` |
+| `document_versions` | document × version (unique), `file_id` → `files`, notes, uploader; older versions' files are moved to internal visibility |
+
+Also added: `properties.emergency_phone`, `emergency_info`, `office_hours` (shown to residents); `files` owners `package` and `document`.
+
+**Double-booking is impossible at the database level.** `bookings_no_overlap` is an exclusion constraint (needs `btree_gist`):
+
+```sql
+EXCLUDE USING gist (amenity_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&)
+  WHERE (exclusive AND status IN ('requested', 'approved'))
+```
+
+The service also locks the amenity row (`SELECT … FOR UPDATE`) before evaluating capacity for shared amenities, and maps the constraint error (`23P01`) to "someone has just booked that time".
+
 ### Full-text search
 
-Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits) and `vendors` (name, legal name, email, trades). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
+Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades) and `documents` (title, description). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
 
 ### Indexes
 
@@ -102,6 +130,7 @@ app_system()         -- current_setting('app.system') = 'on'   (background worke
 | `notifications` | read/update: own rows in the current org (worker: any user in the org it names); insert: own user, or the worker |
 | `notification_preferences` | own rows only |
 | `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
+| Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
 
 Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 testing: inside org A, a user could see their own membership in org B. Covered by a regression test in `tests/integration/tenant-isolation.test.ts`.
 
@@ -109,7 +138,6 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 4 | `amenities`, `amenity_rules`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, `document_versions` (files reuse the Iteration 3 `files` table) |
 | 5 | `parking_spaces`, `storage_lockers`, `visitors`, `visitor_passes`, `vehicles`, `parking_permits`, `parking_violations`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` |
 | 6–7 | `ai_conversations`, `ai_messages`, `ai_action_logs`, `ai_approvals`, `ai_policies`, `ai_usage` |
 | 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |

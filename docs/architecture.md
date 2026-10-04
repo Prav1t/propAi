@@ -1,6 +1,6 @@
 # Architecture
 
-_Iteration 0 design, updated Iteration 1 with what is actually built. Sections marked **(planned)** are not implemented yet._
+_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 4). Sections marked **(planned)** are not implemented yet._
 
 ## 1. Decisions at a glance
 
@@ -15,7 +15,7 @@ _Iteration 0 design, updated Iteration 1 with what is actually built. Sections m
 | Auth | Session-cookie auth built on vetted primitives: **argon2id** (`@node-rs/argon2`), CSPRNG tokens, SHA-256 token hashing, **TOTP** via `otplib`, AES-256-GCM for MFA secrets | Follows the OWASP session-management and Lucia-style guidance; no home-made crypto. OAuth/SSO adapters slot in beside the password provider (Iteration 11) |
 | Jobs / events | Transactional **outbox table** + worker; queue = **pg-boss** (Postgres) first, Redis/BullMQ if throughput requires **(planned, Iteration 9)** | Keeps ops to one datastore early; outbox guarantees events are never lost on commit |
 | Cache / rate limit | In-process limiter behind a `RateLimiter` interface now; Redis adapter when running >1 instance **(planned)** | Honest about current scale; interface avoids rewrite |
-| Files | S3-compatible object storage (MinIO in dev), signed URLs, scanning hook **(planned, Iteration 4)** | Portable across AWS/GCP/Azure/on-prem |
+| Files | `BlobStore` interface: local disk or S3-compatible object storage (AWS S3, MinIO, R2) with presigned URLs and a scanning hook (§9) | Portable across AWS/GCP/Azure/on-prem |
 | Email | `Mailer` interface: `console` (dev outbox table) and `smtp` providers; Resend/SendGrid adapters later | Works with zero config in dev; Mailpit in Docker |
 | AI | Provider abstraction (Anthropic / OpenAI / Google / local) + typed tool registry + policy engine **(Iterations 6–8)**; see `ai-architecture.md` | |
 | Deploy | Docker image (Next.js `standalone` output), Compose for dev; any container host in prod | Cloud-agnostic |
@@ -103,6 +103,19 @@ Each record type has one access function used by its list query (as SQL), its de
 
 Incidents, complaints, tasks and inspections follow the same pattern (scoped staff, assignee, reporter/submitter), with internal notes never shown to residents and `people_involved` hidden from non-staff reporters. Status rules live in pure functions (`maintenance/rules.ts`) with unit tests.
 
+### Community records (Iteration 4)
+
+| Record | Staff (permission on the property) | Residents |
+|---|---|---|
+| Amenities | `amenity.manage` configures rules and closures | see active amenities of their property (and their building, for building-only amenities) |
+| Bookings | `booking.manage` approves/declines, books for any unit, records fees/deposits and damage | book for their own unit if eligible (role list on the amenity); see and cancel only their unit's bookings, up to the cancellation cut-off |
+| Packages | `package.manage` logs, releases (pickup code or signature), returns | see their unit's packages and pickup codes; staff lists never show codes |
+| Announcements | `announcement.manage` drafts, schedules, publishes, archives; read counts | see published, unexpired posts whose property, buildings and audience include them |
+| Messages | `message.manage` works the inbox, assigns, closes, writes internal notes, uses templates | start and reply to their own threads; internal notes are filtered out server-side |
+| Documents | `document.manage` uploads, versions, archives | `audience` residents/owners, matched to their unit, building, property or org-wide; only the current version |
+
+The access rules are one function per record (`canReadDocument`, `documentVisibleWhere`, …) used by the list query, the detail page and every mutation, as in Iteration 3.
+
 ## 7. Security baseline
 
 Implemented in Iteration 1 unless marked planned:
@@ -130,19 +143,34 @@ service (one transaction)                 worker (system context)
                                                  mark processed; commit; then send emails
 ```
 
-- **Transactional outbox:** `emit()` writes an `outbox_events` row in the same transaction as the change, so an event exists if and only if the change committed. Event types so far: `workorder.created|assigned|status_changed|commented|sla_breached`, `task.assigned`, `incident.created|escalated`, `complaint.created|status_changed|commented`, `inspection.failed`.
+- **Transactional outbox:** `emit()` writes an `outbox_events` row in the same transaction as the change, so an event exists if and only if the change committed (`emitSystem()` does the same from worker jobs). Event types so far: `workorder.created|assigned|status_changed|commented|sla_breached`, `task.assigned`, `incident.created|escalated`, `complaint.created|status_changed|commented`, `inspection.failed`, and from Iteration 4 `booking.created|decided|cancelled`, `package.arrived|reminder|released`, `announcement.published`, `message.posted` (community deliveries live in `notifications/community.ts`).
 - **Delivery** (`src/server/modules/notifications/service.ts`): recipients are resolved from live data (managers whose role and scope cover the property; the assignee; the vendor's users; the requester), the actor is excluded, and a comment's visibility limits who hears about it. Notifications are unique per `(event_id, user_id)`, so re-processing is harmless; emails go out only after commit. Per-user, per-kind preferences control in-app and email.
 - **Triggers:** right after a form action (`after()` in `runOrgForm`), on an in-process 30-second loop started from `src/instrumentation.ts`, or a separate `npm run worker` process (set `DISABLE_INPROCESS_WORKER=true` on app instances when you run it).
 - **System context:** the worker sets `app.system = 'on'`, which lets RLS read across orgs to find pending work. Writes still require naming the org (`WITH CHECK (org_id = app_org())`), and a request context can only notify its own user.
-- **SLA monitor:** each tick flags open work orders past `resolve_due_at` once (`sla_breached_at`), adds an internal timeline entry, and emits `workorder.sla_breached`.
+- **Worker jobs per tick**, then the outbox is drained:
+  - **SLA monitor:** flags open work orders past `resolve_due_at` once (`sla_breached_at`), adds an internal timeline entry, and emits `workorder.sla_breached`.
+  - **Scheduled announcements:** publishes those whose `publish_at` has passed and emits `announcement.published` (notifies the audience if the author asked to).
+  - **Package reminders:** one reminder per package waiting `PACKAGE_REMINDER_DAYS` (default 3; perishables after 1 day).
+  - `npm run worker -- --once` runs a single tick for cron-style schedulers.
 - **Next:** the workflow engine (Iteration 9), webhooks (10) and AI insights subscribe to the same outbox.
 
 ## 9. File storage (Iteration 3)
 
 - `BlobStore` interface with two adapters: **local disk** (`FILE_STORAGE=local`, path-traversal-safe keys) and **S3-compatible** (`FILE_STORAGE=s3`: AWS S3, MinIO, R2).
 - Keys are `{orgId}/{entity}/{uuid}`; the `files` row stores the owner record, sniffed MIME type, size, SHA-256, visibility (`public`/`vendor`/`internal`, the same levels as the timeline) and scan status.
-- **Upload:** the real type is detected from magic bytes (JPEG, PNG, WebP, GIF, HEIC, PDF, MP4, MOV); the browser's claim is ignored. Per-type size limits; at most 5 files per upload; a `FileScanner` hook (no-op by default) can block files. Blobs are deleted if the database insert fails.
+- **Upload:** the real type is detected from magic bytes (JPEG, PNG, WebP, GIF, HEIC, PDF, MP4, MOV; for documents also DOCX/XLSX/PPTX, recognised as ZIP packages containing `[Content_Types].xml`, and UTF-8 TXT/CSV); the browser's claim is ignored. Each owner type has its own allow-list (media for work orders, `DOCUMENT_TYPES` for the library). Per-type size limits; at most 5 files per upload; a `FileScanner` hook (no-op by default) can block files. Blobs are deleted if the database insert fails.
 - **Download:** `/o/{org}/files/{id}` re-checks access to the owning record and the file's visibility, writes a `file.downloaded` audit entry, then streams bytes (local) or redirects to a 60-second presigned URL (S3). Responses carry `nosniff`, a sandboxing CSP and `Content-Disposition` (only raster images render inline). Storage URLs are never stored or shown.
+- **Owners added in Iteration 4:** `package` (intake photo visible to the resident; pickup signature internal) and `document` (each version is a file; superseded versions become internal, so residents only ever download the current one). Document views are audited (`document.viewed`) as well as downloads.
+- **S3 options:** `S3_SSE=none` turns off SSE-S3 for MinIO without a KMS; `S3_PUBLIC_ENDPOINT` signs download URLs for the host the browser can reach (e.g. `localhost:9000`) while the app talks to `minio:9000`. The adapter is tested against a real S3-compatible server when `S3_TEST_ENDPOINT` is set.
+
+## 9a. Community modules (Iteration 4)
+
+- **Booking rules engine** (`amenities/rules.ts`, pure and unit-tested): given the amenity's rules, the proposed slot (in the property's time zone, DST-safe), existing bookings, closures, the resident's role and recent bookings, `evaluateBooking()` returns every problem at once (outside hours, off the slot grid, too short/long, too little notice, too far ahead, not eligible, too many people, fully booked — `max_concurrent` bookings at once, closed, over the per-unit limit) plus the resulting status (`requested` when approval is required, otherwise `approved`) and the fee/deposit due. Staff bookings skip notice, advance window, eligibility and per-unit limits and are approved directly, but never bypass hours, closures or capacity. Iteration 7's AI booking tool will call the same function.
+- **Concurrency:** booking creation locks the amenity row, re-reads overlapping bookings and evaluates capacity inside that transaction; exclusive amenities are also protected by the `bookings_no_overlap` exclusion constraint, so two simultaneous requests can never both succeed.
+- **Packages:** carrier detection from the tracking number (`packages/carrier.ts`), recipient matched to the unit's occupants, a random 6-digit pickup code shown only to the resident, release by code or on-screen signature (stored as an internal PNG), bulk release, returns, reminders.
+- **Announcements:** property + building list + audience targeting resolved to users at publish time (`audienceUserIds`), schedule/expiry, read receipts, `{{property}}`/`{{org_name}}`/`{{today}}` placeholders.
+- **Messaging:** one thread per resident conversation, unread tracking per user, assignment, internal notes, and reply templates rendered per thread with `{{resident_name}}`, `{{unit}}`, … (`src/lib/template.ts`); unknown variables are rejected when a template is saved and flagged if data is missing when it's inserted.
+- **Resident app:** a mobile-first home (package banner with pickup codes, unread replies, quick actions, announcements, requests, bookings, important documents, emergency contacts), a bottom tab bar on phones, nav badges, and a web app manifest (installable to the home screen; push notifications are not implemented yet).
 
 ## 10. Integrations (planned, Iteration 10)
 
@@ -150,6 +178,6 @@ service (one transaction)                 worker (system context)
 
 ## 11. Deployment
 
-- **Dev:** `docker compose up` → Postgres (pgvector image), Mailpit, app. Or run Postgres yourself and `npm run dev`.
+- **Dev:** `docker compose up` → Postgres (pgvector image), Mailpit, app; add `--profile s3` with `FILE_STORAGE=s3` for MinIO. Or run Postgres yourself and `npm run dev`.
 - **Prod:** build image with `Dockerfile` (multi-stage, `output: "standalone"`, non-root user). Run `npm run db:migrate` as a release step with the owner URL; run app with the least-privilege URL. Put behind a TLS-terminating proxy/load balancer. Managed Postgres with PITR backups.
 - Health: `GET /api/health` (liveness + DB check).

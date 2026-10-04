@@ -61,11 +61,11 @@ describe("properties", () => {
   it("another org's property id is not found", async () => {
     const ns = await ctxFor("admin@northshore.test", "northshore-strata");
     await expect(getProperty(ns, ids.HBC)).rejects.toThrow(NotFoundError);
-    await expect(updateProperty(ns, ids.HBC, { name: "Hijack", code: "HJK", type: "residential", portfolioId: null, addressLine1: null, city: null, region: null, postalCode: null, timezone: "UTC" })).rejects.toThrow(NotFoundError);
+    await expect(updateProperty(ns, ids.HBC, { name: "Hijack", code: "HJK", type: "residential", portfolioId: null, addressLine1: null, city: null, region: null, postalCode: null, timezone: "UTC", emergencyPhone: null, emergencyInfo: null, officeHours: null })).rejects.toThrow(NotFoundError);
   });
   it("property-scoped managers cannot create properties; org admins can, codes are unique", async () => {
     const pm = await ctxFor("pm@demo.test");
-    const input = { name: "Test Tower", code: `T${uniq()}`, type: "residential" as const, portfolioId: null, addressLine1: null, city: "Surrey", region: "BC", postalCode: null, timezone: "America/Vancouver" };
+    const input = { name: "Test Tower", code: `T${uniq()}`, type: "residential" as const, portfolioId: null, addressLine1: null, city: "Surrey", region: "BC", postalCode: null, timezone: "America/Vancouver", emergencyPhone: null, emergencyInfo: null, officeHours: null };
     await expect(createProperty(pm, input)).rejects.toThrow(ValidationError); // needs a portfolio they manage
     const admin = await ctxFor("admin@demo.test");
     const p = await createProperty(admin, input);
@@ -80,7 +80,7 @@ describe("properties", () => {
     const pm = await ctxFor("pm@demo.test");
     const d = await getProperty(pm, ids.HBC);
     const p = d.property;
-    const base = { name: p.name, code: p.code, type: p.type as "residential", portfolioId: p.portfolioId, addressLine1: p.addressLine1, city: p.city, region: p.region, postalCode: p.postalCode, timezone: p.timezone };
+    const base = { name: p.name, code: p.code, type: p.type as "residential", portfolioId: p.portfolioId, addressLine1: p.addressLine1, city: p.city, region: p.region, postalCode: p.postalCode, timezone: p.timezone, emergencyPhone: p.emergencyPhone, emergencyInfo: p.emergencyInfo, officeHours: p.officeHours };
     await updateProperty(pm, ids.HBC, { ...base, city: "Vancouver" });
     const other = (await listPortfolios(await ctxFor("admin@demo.test"))).find((x) => x.id !== p.portfolioId)!;
     await expect(updateProperty(pm, ids.HBC, { ...base, portfolioId: other.id })).rejects.toThrow(ForbiddenError);

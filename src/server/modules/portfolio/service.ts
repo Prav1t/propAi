@@ -96,6 +96,9 @@ export const propertySchema = z.object({
   region: optText(50),
   postalCode: optText(20),
   timezone: z.string().trim().min(1).max(60).default("America/Vancouver"),
+  emergencyPhone: optText(40),
+  emergencyInfo: optText(1000),
+  officeHours: optText(200),
 });
 export type PropertyInput = z.infer<typeof propertySchema>;
 
@@ -544,5 +547,15 @@ export async function listPropertyOptions(ctx: TenantCtx) {
     tx.select({ id: properties.id, name: properties.name, portfolioId: properties.portfolioId }).from(properties)
       .where(and(eq(properties.orgId, p.orgId), visible ? (visible.length ? inArray(properties.id, visible) : sql`false`) : undefined))
       .orderBy(asc(properties.name)),
+  );
+}
+
+// contact and emergency details of the properties a resident lives in
+export async function myPropertyInfo(ctx: TenantCtx) {
+  const ids = [...ctx.principal.occupantPropertyIds];
+  if (!ids.length) return [];
+  return tenantTx(ctx, (tx) =>
+    tx.select({ id: properties.id, name: properties.name, emergencyPhone: properties.emergencyPhone, emergencyInfo: properties.emergencyInfo, officeHours: properties.officeHours })
+      .from(properties).where(and(eq(properties.orgId, ctx.principal.orgId), inArray(properties.id, ids))).orderBy(asc(properties.name)),
   );
 }

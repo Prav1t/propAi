@@ -10,7 +10,7 @@ import type { TenantCtx } from "./modules/context";
 // every string field except secrets, echoed back so the form keeps input on error
 function echo(fd: FormData): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of fd.entries()) if (typeof v === "string" && !/password|confirm|token/i.test(k) && !k.startsWith("$ACTION")) out[k] = v;
+  for (const [k, v] of fd.entries()) if (typeof v === "string" && !/password|confirm|token|signature/i.test(k) && !k.startsWith("$ACTION")) out[k] = v;
   return out;
 }
 

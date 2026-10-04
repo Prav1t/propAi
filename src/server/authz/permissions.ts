@@ -36,7 +36,7 @@ export const PERMISSIONS = {
   "complaint.read": { module: "complaints", description: "View complaints" },
   "complaint.create": { module: "complaints", description: "Submit complaints" },
   "complaint.manage": { module: "complaints", description: "Manage complaints" },
-  // community (enforced from Iteration 4–5)
+  // community (enforced from Iteration 4; visitors/parking/shifts/assets in Iteration 5)
   "amenity.read": { module: "amenities", description: "View amenities" },
   "amenity.manage": { module: "amenities", description: "Configure amenities" },
   "booking.create": { module: "amenities", description: "Book amenities" },
@@ -48,6 +48,7 @@ export const PERMISSIONS = {
   "announcement.read": { module: "communications", description: "Read announcements" },
   "announcement.manage": { module: "communications", description: "Publish announcements" },
   "message.use": { module: "communications", description: "Send and receive messages" },
+  "message.manage": { module: "communications", description: "Handle resident conversations for properties in scope" },
   "document.read": { module: "documents", description: "Read documents visible to me" },
   "document.manage": { module: "documents", description: "Upload and manage documents" },
   "shift.manage": { module: "staff", description: "Manage shifts and handoffs" },

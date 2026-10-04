@@ -242,6 +242,10 @@ export const properties = pgTable(
     postalCode: text("postal_code"),
     country: text("country").notNull().default("CA"),
     timezone: text("timezone").notNull().default("America/Vancouver"),
+    // shown to residents on their home screen (Iteration 4)
+    emergencyPhone: text("emergency_phone"),
+    emergencyInfo: text("emergency_info"),
+    officeHours: text("office_hours"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -900,4 +904,316 @@ export const outboxEvents = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("outbox_pending_idx").on(t.createdAt).where(sql`${t.processedAt} is null`)],
+);
+
+/* ───────────────────────── Community (Iteration 4, RLS) ───────────────────────── */
+
+export const AMENITY_KINDS = ["gym", "party_room", "pool", "rooftop", "meeting_room", "lounge", "court", "workspace", "guest_suite", "bbq", "theatre", "other"] as const;
+
+// bookable shared spaces; booking rules live on the row and are evaluated by amenities/rules.ts
+export const amenities = pgTable(
+  "amenities",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("other"),
+    description: text("description"),
+    location: text("location"),
+    rules: text("rules"), // human-readable house rules shown before booking
+    capacity: integer("capacity"), // max guests per booking
+    maxConcurrent: integer("max_concurrent").notNull().default(1), // 1 = exclusive use
+    opensAtMinute: integer("opens_at_minute").notNull().default(420),
+    closesAtMinute: integer("closes_at_minute").notNull().default(1320),
+    slotMinutes: integer("slot_minutes").notNull().default(30),
+    minDurationMinutes: integer("min_duration_minutes").notNull().default(30),
+    maxDurationMinutes: integer("max_duration_minutes").notNull().default(240),
+    minNoticeHours: integer("min_notice_hours").notNull().default(0),
+    maxAdvanceDays: integer("max_advance_days").notNull().default(60),
+    limitCount: integer("limit_count"), // per unit, within limitPeriodDays
+    limitPeriodDays: integer("limit_period_days"),
+    cancellationHours: integer("cancellation_hours").notNull().default(24),
+    requiresApproval: boolean("requires_approval").notNull().default(false),
+    feeCents: integer("fee_cents").notNull().default(0),
+    depositCents: integer("deposit_cents").notNull().default(0),
+    eligibleRoles: text("eligible_roles").array().notNull().default(sql`'{}'::text[]`), // empty = every resident role
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("amenities_org_property_idx").on(t.orgId, t.propertyId),
+    check("amenities_hours_ck", sql`${t.opensAtMinute} >= 0 and ${t.closesAtMinute} <= 1440 and ${t.closesAtMinute} > ${t.opensAtMinute}`),
+    check("amenities_duration_ck", sql`${t.minDurationMinutes} > 0 and ${t.maxDurationMinutes} >= ${t.minDurationMinutes} and ${t.slotMinutes} between 5 and 240`),
+    check("amenities_concurrency_ck", sql`${t.maxConcurrent} >= 1 and (${t.capacity} is null or ${t.capacity} >= 1)`),
+    check("amenities_money_ck", sql`${t.feeCents} >= 0 and ${t.depositCents} >= 0`),
+    check("amenities_limit_ck", sql`(${t.limitCount} is null) = (${t.limitPeriodDays} is null)`),
+  ],
+);
+
+// closures (maintenance, private events, holidays)
+export const amenityBlackouts = pgTable(
+  "amenity_blackouts",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    amenityId: uuid("amenity_id").notNull().references(() => amenities.id, { onDelete: "cascade" }),
+    startsAt: ts("starts_at").notNull(),
+    endsAt: ts("ends_at").notNull(),
+    reason: text("reason").notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("amenity_blackouts_idx").on(t.orgId, t.amenityId, t.startsAt),
+    check("amenity_blackouts_range_ck", sql`${t.endsAt} > ${t.startsAt}`),
+  ],
+);
+
+export const BOOKING_STATUSES = ["requested", "approved", "declined", "cancelled"] as const;
+
+// exclusive amenities also get an EXCLUDE constraint (migration 0009) so overlapping holds are impossible
+export const bookings = pgTable(
+  "bookings",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    amenityId: uuid("amenity_id").notNull().references(() => amenities.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    bookedByUserId: uuid("booked_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    startsAt: ts("starts_at").notNull(),
+    endsAt: ts("ends_at").notNull(),
+    guests: integer("guests").notNull().default(1),
+    purpose: text("purpose"),
+    status: text("status").notNull().default("requested"),
+    exclusive: boolean("exclusive").notNull().default(true),
+    feeCents: integer("fee_cents").notNull().default(0),
+    depositCents: integer("deposit_cents").notNull().default(0),
+    feeStatus: text("fee_status").notNull().default("none"),
+    depositStatus: text("deposit_status").notNull().default("none"),
+    decisionNote: text("decision_note"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: ts("decided_at"),
+    cancelledAt: ts("cancelled_at"),
+    cancelReason: text("cancel_reason"),
+    damageNotes: text("damage_notes"),
+    damageWorkOrderId: uuid("damage_work_order_id").references(() => workOrders.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("bookings_org_number_uq").on(t.orgId, t.number),
+    index("bookings_amenity_time_idx").on(t.orgId, t.amenityId, t.startsAt),
+    index("bookings_unit_idx").on(t.orgId, t.unitId, t.startsAt),
+    index("bookings_status_idx").on(t.orgId, t.status, t.startsAt),
+    check("bookings_range_ck", sql`${t.endsAt} > ${t.startsAt}`),
+    check("bookings_status_ck", sql`${t.status} in ('requested','approved','declined','cancelled')`),
+    check("bookings_fee_status_ck", sql`${t.feeStatus} in ('none','due','paid','waived')`),
+    check("bookings_deposit_status_ck", sql`${t.depositStatus} in ('none','due','held','refunded','withheld')`),
+    check("bookings_guests_ck", sql`${t.guests} >= 1`),
+  ],
+);
+
+export const PACKAGE_SIZES = ["envelope", "small", "medium", "large", "oversize"] as const;
+
+export const packages = pgTable(
+  "packages",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").notNull().references(() => buildings.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id").notNull().references(() => units.id, { onDelete: "cascade" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    recipientName: text("recipient_name"),
+    carrier: text("carrier"),
+    trackingNumber: text("tracking_number"),
+    size: text("size").notNull().default("small"),
+    perishable: boolean("perishable").notNull().default(false),
+    shelfLocation: text("shelf_location"),
+    notes: text("notes"),
+    status: text("status").notNull().default("waiting"),
+    pickupCode: text("pickup_code").notNull(),
+    receivedAt: ts("received_at").notNull().defaultNow(),
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    pickedUpAt: ts("picked_up_at"),
+    pickedUpByName: text("picked_up_by_name"),
+    releasedByUserId: uuid("released_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    reminderSentAt: ts("reminder_sent_at"),
+    returnedAt: ts("returned_at"),
+    returnReason: text("return_reason"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("packages_org_status_idx").on(t.orgId, t.status, t.receivedAt),
+    index("packages_unit_idx").on(t.orgId, t.unitId, t.status),
+    index("packages_tracking_idx").on(t.orgId, t.trackingNumber),
+    check("packages_status_ck", sql`${t.status} in ('waiting','picked_up','returned')`),
+    check("packages_size_ck", sql`${t.size} in ('envelope','small','medium','large','oversize')`),
+  ],
+);
+
+export const ANNOUNCEMENT_CATEGORIES = ["general", "maintenance", "event", "policy", "emergency"] as const;
+
+// property_id null = organization-wide; empty building_ids = the whole property
+export const announcements = pgTable(
+  "announcements",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    buildingIds: uuid("building_ids").array().notNull().default(sql`'{}'::uuid[]`),
+    audience: text("audience").notNull().default("everyone"),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    category: text("category").notNull().default("general"),
+    pinned: boolean("pinned").notNull().default(false),
+    notify: boolean("notify").notNull().default(true),
+    status: text("status").notNull().default("draft"),
+    publishAt: ts("publish_at"),
+    publishedAt: ts("published_at"),
+    expiresAt: ts("expires_at"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("announcements_org_idx").on(t.orgId, t.status, t.publishedAt),
+    check("announcements_status_ck", sql`${t.status} in ('draft','scheduled','published','archived')`),
+    check("announcements_audience_ck", sql`${t.audience} in ('everyone','residents','staff')`),
+    check("announcements_category_ck", sql`${t.category} in ('general','maintenance','event','policy','emergency')`),
+  ],
+);
+
+export const announcementReads = pgTable(
+  "announcement_reads",
+  {
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    announcementId: uuid("announcement_id").notNull().references(() => announcements.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    readAt: ts("read_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("announcement_reads_uq").on(t.announcementId, t.userId)],
+);
+
+export const THREAD_CATEGORIES = ["general", "maintenance", "amenities", "parking", "packages", "billing", "other"] as const;
+
+// resident ↔ management conversations
+export const messageThreads = pgTable(
+  "message_threads",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    residentUserId: uuid("resident_user_id").references(() => users.id, { onDelete: "set null" }),
+    subject: text("subject").notNull(),
+    category: text("category").notNull().default("general"),
+    status: text("status").notNull().default("open"),
+    assignedMembershipId: uuid("assigned_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    lastMessageAt: ts("last_message_at").notNull().defaultNow(),
+    lastMessagePreview: text("last_message_preview"),
+    lastFromStaff: boolean("last_from_staff").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("threads_org_idx").on(t.orgId, t.status, t.lastMessageAt),
+    index("threads_resident_user_idx").on(t.orgId, t.residentUserId),
+    check("threads_status_ck", sql`${t.status} in ('open','closed')`),
+  ],
+);
+
+export const messages = pgTable(
+  "messages",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    threadId: uuid("thread_id").notNull().references(() => messageThreads.id, { onDelete: "cascade" }),
+    authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
+    fromStaff: boolean("from_staff").notNull().default(false),
+    internal: boolean("internal").notNull().default(false), // staff-only note
+    body: text("body").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("messages_thread_idx").on(t.orgId, t.threadId, t.createdAt)],
+);
+
+export const messageReads = pgTable(
+  "message_reads",
+  {
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    threadId: uuid("thread_id").notNull().references(() => messageThreads.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    lastReadAt: ts("last_read_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("message_reads_uq").on(t.threadId, t.userId)],
+);
+
+// reusable text with {{variables}}; property_id null = organization-wide
+export const messageTemplates = pgTable(
+  "message_templates",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    body: text("body").notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("message_templates_org_idx").on(t.orgId)],
+);
+
+export const DOCUMENT_CATEGORIES = ["bylaws", "rules", "policy", "minutes", "notice", "insurance", "manual", "lease", "form", "financial", "other"] as const;
+
+// property_id null = organization-wide; unit_id = a unit's private documents (e.g. lease)
+export const documents = pgTable(
+  "documents",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    category: text("category").notNull().default("other"),
+    audience: text("audience").notNull().default("residents"),
+    important: boolean("important").notNull().default(false),
+    status: text("status").notNull().default("active"),
+    currentVersion: integer("current_version").notNull().default(0),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("documents_org_idx").on(t.orgId, t.status, t.category),
+    index("documents_unit_idx").on(t.orgId, t.unitId),
+    check("documents_audience_ck", sql`${t.audience} in ('staff','residents','owners')`),
+    check("documents_status_ck", sql`${t.status} in ('active','archived')`),
+  ],
+);
+
+export const documentVersions = pgTable(
+  "document_versions",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    fileId: uuid("file_id").notNull().references(() => files.id, { onDelete: "restrict" }),
+    notes: text("notes"),
+    uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("document_versions_uq").on(t.documentId, t.version)],
 );

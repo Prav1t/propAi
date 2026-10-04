@@ -22,6 +22,7 @@ COPY drizzle ./drizzle
 COPY scripts ./scripts
 COPY src/server ./src/server
 COPY src/config ./src/config
+COPY src/lib ./src/lib
 CMD ["sh", "-c", "npm run db:migrate && if [ \"$SEED_DEMO\" = \"true\" ]; then npm run db:seed; fi"]
 
 # minimal runtime: Next.js standalone server as a non-root user

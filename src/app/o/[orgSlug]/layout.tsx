@@ -8,14 +8,28 @@ import { searchAction } from "./search-action";
 import { unreadCount } from "@/server/modules/notifications/service";
 import { Icon } from "@/components/shell/icons";
 import Link from "next/link";
+import { ResidentTabs } from "@/components/shell/resident-tabs";
+import { messageBadgeCount } from "@/server/modules/messaging/service";
+import { unreadAnnouncementCount } from "@/server/modules/announcements/service";
+import { listPackages, canUsePackages } from "@/server/modules/packages/service";
+import { bookingStats } from "@/server/modules/amenities/service";
 
 export default async function OrgLayout({ children, params }: LayoutProps<"/o/[orgSlug]">) {
   const { orgSlug } = await params;
   const { session, principal, ctx } = await getOrgContext(orgSlug);
-  const unread = await unreadCount(ctx);
-  const sections = visibleNav(principal.permissions).map((s) => ({
+  const resident = principal.role.category === "resident";
+  // live counts for nav badges (each query is permission-scoped and cheap)
+  const [unread, messages, announcements, packages, bookings] = await Promise.all([
+    unreadCount(ctx),
+    messageBadgeCount(ctx),
+    resident ? unreadAnnouncementCount(ctx) : Promise.resolve(0),
+    resident && canUsePackages(principal) ? listPackages(ctx, { view: "waiting", pageSize: 1 }).then((r) => r.total) : Promise.resolve(0),
+    !resident ? bookingStats(ctx).then((r) => r?.pending ?? 0) : Promise.resolve(0),
+  ]);
+  const badges: Record<string, number> = { messages, announcements, packages, bookings };
+  const sections = visibleNav(principal.permissions, principal.role.category).map((s) => ({
     title: s.title,
-    items: s.items.map((i) => ({ label: i.label, icon: i.icon, href: i.href(orgSlug) })),
+    items: s.items.map((i) => ({ label: i.label, icon: i.icon, href: i.href(orgSlug), badge: i.badgeKey ? badges[i.badgeKey] : undefined })),
   }));
   const base = `/o/${orgSlug}`;
   // quick actions shown in the palette, filtered by permission (server still enforces)
@@ -26,6 +40,13 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     ...(principal.permissions.has("inspection.manage") ? [{ label: "Schedule inspection", href: `${base}/inspections/new`, group: "Action", keywords: "new checklist" }] : []),
     ...(principal.permissions.has("incident.create") ? [{ label: "Report incident", href: `${base}/incidents/new`, group: "Action", keywords: "new security damage injury" }] : []),
     ...(principal.permissions.has("complaint.create") || principal.permissions.has("complaint.manage") ? [{ label: "New complaint", href: `${base}/complaints/new`, group: "Action", keywords: "noise neighbour issue" }] : []),
+    ...(principal.permissions.has("booking.create") || principal.permissions.has("booking.manage") ? [{ label: "Book an amenity", href: `${base}/amenities`, group: "Action", keywords: "party room gym reserve booking" }] : []),
+    ...(principal.permissions.has("booking.manage") ? [{ label: "Bookings awaiting approval", href: `${base}/amenities/bookings?view=pending`, group: "Action", keywords: "approve requests" }] : []),
+    ...(principal.permissions.has("package.manage") ? [{ label: "Log a package", href: `${base}/packages`, group: "Action", keywords: "delivery parcel courier scan" }] : []),
+    ...(principal.permissions.has("announcement.manage") ? [{ label: "New announcement", href: `${base}/announcements/new`, group: "Action", keywords: "notice post notify residents" }] : []),
+    ...(principal.permissions.has("message.manage") ? [{ label: "Message a resident", href: `${base}/messages/new`, group: "Action", keywords: "contact write" }] : []),
+    ...(resident && principal.permissions.has("message.use") ? [{ label: "Message management", href: `${base}/messages/new`, group: "Action", keywords: "contact write question" }] : []),
+    ...(principal.permissions.has("document.manage") ? [{ label: "Upload document", href: `${base}/documents/new`, group: "Action", keywords: "bylaws rules file" }] : []),
     { label: "Notifications", href: `${base}/notifications`, group: "Navigate", keywords: "inbox alerts email" },
     ...(principal.role.scopeLevel === "org" && can(principal, "property.manage") ? [{ label: "Create property", href: `${base}/properties/new`, group: "Action", keywords: "new add building" }] : []),
     ...(principal.permissions.has("resident.manage") ? [{ label: "Add resident", href: `${base}/residents/new`, group: "Action", keywords: "new tenant owner move in" }] : []),
@@ -59,8 +80,15 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
             Admins should turn on two-factor authentication. <a className="font-medium underline" href="/account/security">Set it up</a>
           </div>
         ) : null}
-        <main id="main" className="mx-auto max-w-6xl px-4 py-6 sm:px-6">{children}</main>
+        <main id="main" className={`mx-auto max-w-6xl px-4 py-6 sm:px-6${resident ? " pb-24 lg:pb-6" : ""}`}>{children}</main>
       </div>
+      {resident ? <ResidentTabs tabs={[
+        { label: "Home", href: `${base}/dashboard`, icon: "home" },
+        ...(principal.permissions.has("workorder.create") ? [{ label: "Requests", href: `${base}/maintenance`, icon: "wrench" }] : []),
+        ...(principal.permissions.has("amenity.read") ? [{ label: "Book", href: `${base}/amenities`, icon: "calendar" }] : []),
+        ...(canUsePackages(principal) ? [{ label: "Packages", href: `${base}/packages`, icon: "box", badge: packages }] : []),
+        ...(principal.permissions.has("message.use") ? [{ label: "Messages", href: `${base}/messages`, icon: "message", badge: messages }] : []),
+      ]} /> : null}
     </div>
   );
 }

@@ -1,6 +1,11 @@
 import type { Permission } from "@/server/authz/permissions";
 
-export type NavItem = { label: string; href: (slug: string) => string; anyOf?: Permission[]; icon: string };
+export type NavItem = {
+  label: string; href: (slug: string) => string; anyOf?: Permission[]; icon: string;
+  badgeKey?: string; // filled in by the layout with a live count
+  residentLabel?: string; // wording for resident roles
+  residentsAlso?: Permission[]; // extra permissions that unlock the item for resident roles only
+};
 export type NavSection = { title?: string; items: NavItem[] };
 
 // only modules that are actually built are listed; later iterations append here
@@ -13,7 +18,17 @@ export const NAV: NavSection[] = [
       { label: "Tasks", href: (s) => `/o/${s}/tasks`, anyOf: ["task.read", "task.manage"], icon: "check" },
       { label: "Inspections", href: (s) => `/o/${s}/inspections`, anyOf: ["inspection.read", "inspection.manage"], icon: "clipboard" },
       { label: "Incidents", href: (s) => `/o/${s}/incidents`, anyOf: ["incident.read", "incident.create"], icon: "alert" },
-      { label: "Complaints", href: (s) => `/o/${s}/complaints`, anyOf: ["complaint.read", "complaint.create", "complaint.manage"], icon: "message" },
+      { label: "Complaints", href: (s) => `/o/${s}/complaints`, anyOf: ["complaint.read", "complaint.create", "complaint.manage"], icon: "flag" },
+    ],
+  },
+  {
+    title: "Community",
+    items: [
+      { label: "Amenities", residentLabel: "Book amenities", href: (s) => `/o/${s}/amenities`, anyOf: ["amenity.read", "amenity.manage", "booking.manage"], icon: "calendar", badgeKey: "bookings" },
+      { label: "Packages", residentLabel: "My packages", href: (s) => `/o/${s}/packages`, anyOf: ["package.manage", "package.read.own"], icon: "box", badgeKey: "packages" },
+      { label: "Announcements", href: (s) => `/o/${s}/announcements`, anyOf: ["announcement.read", "announcement.manage"], icon: "megaphone", badgeKey: "announcements" },
+      { label: "Messages", href: (s) => `/o/${s}/messages`, anyOf: ["message.manage"], residentsAlso: ["message.use"], icon: "message", badgeKey: "messages" },
+      { label: "Documents", href: (s) => `/o/${s}/documents`, anyOf: ["document.read", "document.manage"], icon: "file" },
     ],
   },
   {
@@ -45,6 +60,7 @@ export const NAV: NavSection[] = [
 ];
 
 // filters nav by the principal's permissions (cosmetic; the server enforces access)
-export function visibleNav(permissions: ReadonlySet<string>): NavSection[] {
-  return NAV.map((s) => ({ ...s, items: s.items.filter((i) => !i.anyOf || i.anyOf.some((p) => permissions.has(p))) })).filter((s) => s.items.length);
+export function visibleNav(permissions: ReadonlySet<string>, category: string = "staff"): NavSection[] {
+  const ok = (i: NavItem) => !i.anyOf || i.anyOf.some((p) => permissions.has(p)) || (category === "resident" && !!i.residentsAlso?.some((p) => permissions.has(p)));
+  return NAV.map((s) => ({ ...s, items: s.items.filter(ok).map((i) => (category === "resident" && i.residentLabel ? { ...i, label: i.residentLabel } : i)) })).filter((s) => s.items.length);
 }

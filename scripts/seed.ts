@@ -3,6 +3,7 @@ import { ownerDb } from "./lib";
 import * as s from "../src/server/db/schema";
 import { hashPassword } from "../src/server/auth/password";
 import { seedOps } from "./seed-ops";
+import { seedCommunity, seedFile } from "./seed-community";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -15,6 +16,7 @@ export const DEMO_USERS = {
   facility: { email: "facility@demo.test", name: "Daniel Okafor" },
   staff: { email: "staff@demo.test", name: "Luis Moreno" },
   resident: { email: "resident@demo.test", name: "Emma Tremblay" },
+  owner: { email: "owner@demo.test", name: "Noah Williams" },
   vendor: { email: "vendor@demo.test", name: "Jordan Blake" },
   council: { email: "council@demo.test", name: "Harpreet Gill" },
   northshoreAdmin: { email: "admin@northshore.test", name: "Olivia Martin" },
@@ -115,11 +117,12 @@ async function main() {
           for (let n = 1; n <= b.units.perFloor; n++) {
             const beds = pick([0, 1, 1, 2, 2, 2, 3]);
             const r = rand();
+            const forceOccupied = p.code === "FRT" && b.code === "A" && f.level === 8 && n === 5; // demo owner's home
             unitValues.push({
               orgId: pac.id, propertyId: prop.id, buildingId: bld.id, floorId: f.id,
               number: `${f.level}${String(n).padStart(2, "0")}`, type: "residential", bedrooms: beds, bathrooms: beds >= 2 ? "2.0" : "1.0",
               areaSqft: 450 + beds * 280 + Math.floor(rand() * 120),
-              status: r < 0.9 ? "occupied" : r < 0.95 ? "vacant" : r < 0.98 ? "notice" : "renovation",
+              status: forceOccupied || r < 0.9 ? "occupied" : r < 0.95 ? "vacant" : r < 0.98 ? "notice" : "renovation",
             });
           }
         }
@@ -129,19 +132,21 @@ async function main() {
         // residents for occupied residential units
         for (const u of unitRows.filter((x) => x.status !== "vacant" && x.type === "residential" && x.status !== "renovation")) {
           const isDemoResident = p.code === "FRT" && b.code === "B" && u.number === "1204";
-          const count = isDemoResident ? 1 : pick([1, 1, 2, 2, 3]);
+          const isDemoOwner = p.code === "FRT" && b.code === "A" && u.number === "805";
+          const count = isDemoResident ? 1 : isDemoOwner ? 2 : pick([1, 1, 2, 2, 3]);
           for (let i = 0; i < count; i++) {
-            const first = isDemoResident ? "Emma" : pick(FIRST);
-            const last = isDemoResident ? "Tremblay" : pick(LAST);
+            const demoUser = isDemoResident ? DEMO_USERS.resident : isDemoOwner && i === 0 ? DEMO_USERS.owner : null;
+            const first = isDemoResident ? "Emma" : demoUser ? "Noah" : isDemoOwner ? "Leila" : pick(FIRST);
+            const last = isDemoResident ? "Tremblay" : isDemoOwner ? "Williams" : pick(LAST);
             const [res] = await tx.insert(s.residents).values({
-              orgId: pac.id, userId: isDemoResident ? U(DEMO_USERS.resident.email).id : null, firstName: first, lastName: last,
-              email: isDemoResident ? DEMO_USERS.resident.email : `${first}.${last}.${residentCount}@example.com`.toLowerCase(),
+              orgId: pac.id, userId: demoUser ? U(demoUser.email).id : null, firstName: first, lastName: last,
+              email: demoUser ? demoUser.email : `${first}.${last}.${residentCount}@example.com`.toLowerCase(),
               phone: `604-555-${String(1000 + (residentCount % 9000)).padStart(4, "0")}`,
             }).returning();
             residentCount++;
             const relationship = p.type === "rental" ? (i === 0 ? "tenant" : "occupant") : i === 0 ? pick(["owner", "resident", "tenant"]) : "occupant";
             await tx.insert(s.unitOccupancies).values({
-              orgId: pac.id, unitId: u.id, residentId: res.id, relationship: isDemoResident ? "resident" : relationship, isPrimary: i === 0,
+              orgId: pac.id, unitId: u.id, residentId: res.id, relationship: isDemoResident ? "resident" : isDemoOwner ? (i === 0 ? "owner" : "occupant") : relationship, isPrimary: i === 0,
               startsOn: `20${pick(["19", "20", "21", "22", "23", "24", "25"])}-0${1 + Math.floor(rand() * 9)}-01`,
             });
             if (isDemoResident) residentUnitId = u.id;
@@ -197,6 +202,7 @@ async function main() {
     await profile(await member(DEMO_USERS.facility.email, "facility_manager", "Facility Manager", [{ portfolioId: pfMix.id }]), "604-555-0104", ["hvac", "preventive maintenance", "bms"]);
     await profile(await member(DEMO_USERS.staff.email, "maintenance_staff", "Building Technician", [{ buildingId: buildingIds["HBC-MAIN"] }]), "604-555-0105", ["plumbing", "electrical", "painting"]);
     await member(DEMO_USERS.resident.email, "resident", "Resident, Tower B #1204");
+    await member(DEMO_USERS.owner.email, "owner", "Owner, Tower A #805");
     await member(DEMO_USERS.vendor.email, "vendor", "Owner", undefined, vendorIds["Blake Plumbing & Heating"]);
     await profile(await member(DEMO_USERS.council.email, "council_member", "Council President", [{ propertyId: propIds.PCH }]), "604-555-0106", ["governance"], "on_call");
     await tx.insert(s.auditLogs).values({ orgId: pac.id, actorUserId: U(DEMO_USERS.admin.email).id, action: "org.created", entityType: "organization", entityId: pac.id, after: { name: pac.name, source: "seed" } });
@@ -239,8 +245,25 @@ async function main() {
     await tx.insert(s.notificationPreferences).values({ orgId: ns.id, userId: nsUser, kind: "task.assigned", email: true, inApp: true });
     await tx.insert(s.outboxEvents).values({ orgId: ns.id, type: "workorder.created", payload: { workOrderId: nsWo.id }, processedAt: new Date() });
 
+    // community rows in the second tenant too, so isolation tests cover every table
+    const [nsAm] = await tx.insert(s.amenities).values({ orgId: ns.id, propertyId: nsProp.id, name: "Guest Lounge", kind: "lounge" }).returning();
+    await tx.insert(s.amenityBlackouts).values({ orgId: ns.id, amenityId: nsAm.id, startsAt: new Date("2026-12-24T08:00:00Z"), endsAt: new Date("2026-12-26T08:00:00Z"), reason: "Holidays" });
+    await tx.insert(s.bookings).values({ orgId: ns.id, number: 1, amenityId: nsAm.id, propertyId: nsProp.id, unitId: nsUnit.id, residentId: nsRes.id, startsAt: new Date("2026-11-07T02:00:00Z"), endsAt: new Date("2026-11-07T04:00:00Z"), status: "approved" });
+    await tx.insert(s.packages).values({ orgId: ns.id, propertyId: nsProp.id, buildingId: nsBld.id, unitId: nsUnit.id, residentId: nsRes.id, recipientName: "Tremblay Northshore", carrier: "Canada Post", pickupCode: "424242" });
+    const [nsAnn] = await tx.insert(s.announcements).values({ orgId: ns.id, propertyId: nsProp.id, title: "Window washing Friday", body: "Please keep blinds closed.", status: "published", publishedAt: new Date() }).returning();
+    await tx.insert(s.announcementReads).values({ orgId: ns.id, announcementId: nsAnn.id, userId: nsUser });
+    const [nsThread] = await tx.insert(s.messageThreads).values({ orgId: ns.id, propertyId: nsProp.id, buildingId: nsBld.id, unitId: nsUnit.id, residentId: nsRes.id, subject: "Locker key", lastMessagePreview: "Spare key?" }).returning();
+    await tx.insert(s.messages).values({ orgId: ns.id, threadId: nsThread.id, body: "Spare key?" });
+    await tx.insert(s.messageReads).values({ orgId: ns.id, threadId: nsThread.id, userId: nsUser });
+    await tx.insert(s.messageTemplates).values({ orgId: ns.id, name: "Thanks", body: "Thanks {{resident_first_name}}!" });
+    const [nsDoc] = await tx.insert(s.documents).values({ orgId: ns.id, propertyId: nsProp.id, title: "Lonsdale bylaws", category: "bylaws", audience: "owners", currentVersion: 1 }).returning();
+    const nsFile = await seedFile(tx, ns.id, "document", nsDoc.id, "bylaws.txt", new TextEncoder().encode("Lonsdale Quay Lofts bylaws\n"), "text/plain");
+    await tx.insert(s.documentVersions).values({ orgId: ns.id, documentId: nsDoc.id, version: 1, fileId: nsFile.id });
+
     const ops = await seedOps(tx, pac.id);
     console.log(`✓ operations: ${ops.workOrders} work orders, ${ops.tasks} tasks, ${ops.inspections} inspections, ${ops.incidents} incidents, ${ops.complaints} complaints`);
+    const com = await seedCommunity(tx, pac.id);
+    console.log(`✓ community: ${com.amenities} amenities, ${com.bookings} bookings, ${com.packages} packages, ${com.announcements} announcements, ${com.documents} documents`);
     console.log(`✓ seeded 2 orgs, ${Object.keys(propIds).length + 1} properties, ${unitCount + 30} units, ${residentCount} residents, ${userRows.length} demo users`);
   });
   await pool.end();

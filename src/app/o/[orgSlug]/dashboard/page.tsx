@@ -1,17 +1,19 @@
 import Link from "next/link";
 import { getOrgContext } from "@/server/org-context";
-import { getOrgStats, listAuditLogs, listMyUnits } from "@/server/modules/organizations/service";
+import { getOrgStats, listAuditLogs } from "@/server/modules/organizations/service";
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th } from "@/components/ui/primitives";
 import { describeAudit } from "@/lib/audit-labels";
-import { LinkButton } from "@/components/ui/button";
 import { BarList } from "@/components/ops/bar-list";
 import { WoMiniList } from "@/components/ops/wo-mini-list";
 import { listWorkOrders, canListWorkOrders } from "@/server/modules/maintenance/service";
-import { listComplaints } from "@/server/modules/complaints/service";
 import { listTasks, canUseTasks } from "@/server/modules/tasks/service";
 import { getOpsKpis } from "@/server/modules/ops/kpis";
-import { COMPLAINT_STATUS, TASK_STATUS, WO_CATEGORY } from "@/lib/ops-labels";
+import { TASK_STATUS, WO_CATEGORY } from "@/lib/ops-labels";
 import { relative } from "@/lib/time";
+import { ResidentHome } from "./resident-home";
+import { packageStats } from "@/server/modules/packages/service";
+import { bookingStats } from "@/server/modules/amenities/service";
+import { messageBadgeCount } from "@/server/modules/messaging/service";
 
 function StatLink({ href, ...p }: { href: string; label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return <Link href={href} className="block rounded-[var(--radius-lg)] focus-visible:outline-2 [&>div]:hover:border-border-strong"><Stat {...p} /></Link>;
@@ -29,57 +31,7 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   const first = session.user.name.split(" ")[0];
 
   const base = `/o/${orgSlug}`;
-  if (principal.role.scopeLevel === "occupant") {
-    const myUnits = await listMyUnits(ctx);
-    const [reqs, comps] = await Promise.all([
-      canListWorkOrders(principal) ? listWorkOrders(ctx, { view: "open", pageSize: 5 }) : null,
-      principal.permissions.has("complaint.create") ? listComplaints(ctx, { view: "open" }) : null,
-    ]);
-    return (
-      <>
-        <PageHeader title={`Hi ${first}`} description={principal.orgName}
-          actions={principal.permissions.has("workorder.create") && myUnits.length ? <LinkButton href={`${base}/maintenance/new`}>Report a problem</LinkButton> : null} />
-        <div className="mb-6 grid gap-6 lg:grid-cols-2">
-          {reqs ? (
-            <Panel>
-              <PanelHeader title="Open requests" actions={<Link href={`${base}/maintenance`} className="text-[13px] text-accent hover:underline">All requests</Link>} />
-              <WoMiniList rows={reqs.rows} base={base} empty="No open requests" showLocation={false} />
-            </Panel>
-          ) : null}
-          {comps ? (
-            <Panel>
-              <PanelHeader title="Open complaints" actions={<Link href={`${base}/complaints`} className="text-[13px] text-accent hover:underline">All complaints</Link>} />
-              {comps.rows.length === 0 ? <EmptyState title="Nothing open" /> : (
-                <ul className="divide-y divide-border">{comps.rows.slice(0, 5).map((c) => (
-                  <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                    <Link href={`${base}/complaints/${c.id}`} className="truncate text-sm font-medium hover:underline">{c.subject}</Link>
-                    <Badge tone={COMPLAINT_STATUS[c.status]?.tone}>{COMPLAINT_STATUS[c.status]?.label}</Badge>
-                  </li>))}</ul>
-              )}
-            </Panel>
-          ) : null}
-        </div>
-        <Panel>
-          <PanelHeader title="Your home" />
-          {myUnits.length === 0 ? (
-            <EmptyState title="No unit linked yet">Your building manager hasn&apos;t linked your account to a unit. Contact them to get set up.</EmptyState>
-          ) : (
-            <ul className="divide-y divide-border">
-              {myUnits.map((u) => (
-                <li key={u.unitId} className="flex items-center justify-between px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium">Unit {u.number}</p>
-                    <p className="text-[13px] text-muted">{u.building} · {u.property}</p>
-                  </div>
-                  <Badge>{u.relationship[0].toUpperCase() + u.relationship.slice(1)}</Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      </>
-    );
-  }
+  if (principal.role.scopeLevel === "occupant") return <ResidentHome ctx={ctx} principal={principal} first={first} base={base} />;
 
   if (!principal.permissions.has("property.read")) {
     const jobs = canListWorkOrders(principal) ? await listWorkOrders(ctx, { view: "open", pageSize: 10 }) : null;
@@ -102,6 +54,7 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   const wo = kpis.workOrders;
   const assignedToMe = principal.permissions.has("workorder.read.assigned") || principal.permissions.has("workorder.manage") ? await listWorkOrders(ctx, { view: "mine", pageSize: 6 }) : null;
   const myTasks = canUseTasks(principal) ? await listTasks(ctx, { view: "mine" }) : null;
+  const [pkg, bk, msgs] = await Promise.all([packageStats(ctx), bookingStats(ctx), principal.permissions.has("message.manage") ? messageBadgeCount(ctx) : Promise.resolve(null)]);
 
   return (
     <>
@@ -133,6 +86,18 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
             {kpis.incidents ? <StatLink href={`${base}/incidents`} label="Open incidents" value={kpis.incidents.open} sub={`${kpis.incidents.openSerious} high/critical · ${kpis.incidents.last7} in 7 days`} /> : null}
             {kpis.inspections ? <StatLink href={`${base}/inspections`} label="Inspections next 14 days" value={kpis.inspections.upcoming} sub={kpis.inspections.overdue ? `${kpis.inspections.overdue} overdue` : "none overdue"} /> : null}
             <StatLink href={`${base}/tasks?view=mine`} label="My open tasks" value={kpis.myTasks.open} sub={kpis.myTasks.overdue ? `${kpis.myTasks.overdue} overdue` : undefined} />
+          </div>
+        </section>
+      ) : null}
+
+      {pkg || bk || msgs !== null ? (
+        <section aria-labelledby="community-h" className="mb-6">
+          <h2 id="community-h" className="mb-2 text-[13px] font-medium text-muted">Front desk & community</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {pkg ? <StatLink href={`${base}/packages`} label="Packages waiting" value={pkg.waiting} sub={pkg.overdue ? `${pkg.overdue} over 7 days` : `${pkg.last24h} arrived in 24 h`} /> : null}
+            {pkg && pkg.perishable ? <StatLink href={`${base}/packages`} label="Perishable waiting" value={<span className="text-danger">{pkg.perishable}</span>} /> : null}
+            {bk ? <StatLink href={`${base}/amenities/bookings?view=pending`} label="Bookings to approve" value={<span className={bk.pending ? "text-warning" : undefined}>{bk.pending}</span>} sub={`${bk.today} booked today`} /> : null}
+            {msgs !== null ? <StatLink href={`${base}/messages`} label="Messages needing a reply" value={<span className={msgs ? "text-warning" : undefined}>{msgs}</span>} /> : null}
           </div>
         </section>
       ) : null}

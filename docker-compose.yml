@@ -1,5 +1,6 @@
 # Local stack: Postgres (pgvector) + Mailpit + one-shot migrator + app
 # Usage: cp .env.example .env && set APP_ENCRYPTION_KEY, then `docker compose up --build`
+# S3 instead of a local volume: FILE_STORAGE=s3 docker compose --profile s3 up --build  (MinIO console: http://localhost:9001)
 name: propai
 
 services:
@@ -25,14 +26,49 @@ services:
     image: axllent/mailpit:latest
     ports: ["8025:8025", "1025:1025"]
 
+  # optional S3-compatible storage (profile "s3"); the bucket is created by minio-init
+  minio:
+    image: minio/minio:latest
+    profiles: ["s3"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: propai
+      MINIO_ROOT_PASSWORD: propai-minio
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    profiles: ["s3"]
+    entrypoint: ["sh", "-c", "mc alias set local http://minio:9000 propai propai-minio && mc mb --ignore-existing local/propai-files"]
+    depends_on:
+      minio: { condition: service_healthy }
+
   migrate:
     build: { context: ., target: migrator }
     environment:
       MIGRATION_DATABASE_URL: postgres://propai:propai@db:5432/propai
       DATABASE_URL: postgres://propai_app:propai_app@db:5432/propai
       SEED_DEMO: ${SEED_DEMO:-true}
+      FILE_STORAGE: ${FILE_STORAGE:-local}
+      FILE_STORAGE_DIR: /app/.data/uploads
+      S3_BUCKET: ${S3_BUCKET:-propai-files}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_SSE: ${S3_SSE:-none}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-propai}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-propai-minio}
+    volumes:
+      - uploads:/app/.data/uploads # demo documents are written here by the seed
     depends_on:
       db: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully, required: false } # only with --profile s3
 
   app:
     build: { context: ., target: runner }
@@ -46,6 +82,13 @@ services:
       SHOW_DEMO_ACCOUNTS: ${SHOW_DEMO_ACCOUNTS:-true}
       FILE_STORAGE: ${FILE_STORAGE:-local}
       FILE_STORAGE_DIR: /app/.data/uploads
+      S3_BUCKET: ${S3_BUCKET:-propai-files}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_SSE: ${S3_SSE:-none}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-propai}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-propai-minio}
+      PACKAGE_REMINDER_DAYS: ${PACKAGE_REMINDER_DAYS:-3}
     ports: ["3000:3000"]
     volumes:
       - uploads:/app/.data/uploads
@@ -56,3 +99,4 @@ services:
 volumes:
   pgdata:
   uploads:
+  miniodata:

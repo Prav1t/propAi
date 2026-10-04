@@ -1,8 +1,8 @@
 import "server-only";
-import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { withContext, type Tx } from "../../db/client";
 import {
-  complaints, incidents, inspections, memberships, notificationPreferences, notifications, organizations, outboxEvents, roles,
+  complaints, incidents, inspections, notificationPreferences, notifications, organizations, outboxEvents,
   tasks, timelineEvents, users, workOrders,
 } from "../../db/schema";
 import type { TenantCtx } from "../context";
@@ -12,6 +12,8 @@ import { notificationTemplate } from "../../mail/templates";
 import { env } from "../../env";
 import { log } from "../../log";
 import { addTimeline } from "../ops/core";
+import { membershipUser, usersWithPermAt, vendorUsers } from "./recipients";
+import { communityDeliveries } from "./community";
 
 /* ───── catalogue ───── */
 
@@ -29,38 +31,18 @@ export const NOTIFICATION_KINDS = {
   "complaint.received": { label: "New complaints at my properties", emailDefault: false },
   "complaint.updated": { label: "Updates on my complaints", emailDefault: true },
   "inspection.failed": { label: "Failed inspections", emailDefault: true },
+  "booking.request": { label: "Amenity booking requests and cancellations to review", emailDefault: false },
+  "booking.updated": { label: "Updates on my amenity bookings", emailDefault: true },
+  "package.arrived": { label: "Packages: arrivals, reminders and pickups", emailDefault: true },
+  "announcement.posted": { label: "Building announcements", emailDefault: true },
+  "message.received": { label: "Replies from building management", emailDefault: true },
+  "message.inbox": { label: "New messages from residents", emailDefault: false },
 } as const;
 export type NotificationKind = keyof typeof NOTIFICATION_KINDS;
 
 /* ───── recipients ───── */
 
-// active users whose role grants `perm` and whose scope covers the property (or building)
-async function usersWithPermAt(tx: Tx, orgId: string, perm: string, propertyId: string, buildingId: string | null): Promise<string[]> {
-  const rows = await tx.selectDistinct({ userId: memberships.userId }).from(memberships)
-    .innerJoin(roles, eq(roles.id, memberships.roleId))
-    .where(and(
-      eq(memberships.orgId, orgId), eq(memberships.status, "active"), sql`${perm} = any(${roles.permissions})`,
-      or(eq(roles.scopeLevel, "org"), sql`exists (select 1 from membership_scopes s where s.membership_id = ${memberships.id} and (
-        s.property_id = ${propertyId}
-        or s.portfolio_id = (select portfolio_id from properties where id = ${propertyId})
-        or ${buildingId ? sql`s.building_id = ${buildingId}` : sql`s.building_id in (select id from buildings where property_id = ${propertyId})`}))`),
-    ));
-  return rows.map((r) => r.userId);
-}
-
-async function membershipUser(tx: Tx, membershipId: string | null): Promise<string[]> {
-  if (!membershipId) return [];
-  const [m] = await tx.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.id, membershipId), eq(memberships.status, "active")));
-  return m ? [m.userId] : [];
-}
-
-async function vendorUsers(tx: Tx, vendorId: string | null): Promise<string[]> {
-  if (!vendorId) return [];
-  const rows = await tx.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.vendorId, vendorId), eq(memberships.status, "active")));
-  return rows.map((r) => r.userId);
-}
-
-type Delivery = { userIds: string[]; kind: NotificationKind; title: string; body?: string | null; href: string; entityType: string; entityId: string };
+export type Delivery = { userIds: string[]; kind: NotificationKind; title: string; body?: string | null; href: string; entityType: string; entityId: string };
 
 /* ───── event handlers: event → deliveries ───── */
 
@@ -150,7 +132,7 @@ async function deliveriesFor(tx: Tx, e: Event, base: string): Promise<Delivery[]
       return [{ userIds: await usersWithPermAt(tx, e.orgId, "inspection.manage", i.propertyId, i.buildingId), kind: "inspection.failed", title: `Inspection failed: ${i.title}`, body: `${p.failed} item(s) failed.`, href: `${base}/inspections/${i.id}`, entityType: "inspection", entityId: i.id }];
     }
     default:
-      return [];
+      return communityDeliveries(tx, e, base);
   }
 }
 

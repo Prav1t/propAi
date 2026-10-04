@@ -9,7 +9,7 @@ import { SubmitButton } from "./button";
 export type FieldDef = {
   name: string;
   label: string;
-  type?: "text" | "email" | "tel" | "url" | "number" | "date" | "datetime-local" | "textarea" | "select" | "checkbox";
+  type?: "text" | "email" | "tel" | "url" | "number" | "date" | "datetime-local" | "time" | "textarea" | "select" | "checkbox" | "checkboxes" | "file";
   options?: { value: string; label: string }[];
   defaultValue?: string | number | boolean | null;
   placeholder?: string;
@@ -19,6 +19,10 @@ export type FieldDef = {
   step?: string;
   autoFocus?: boolean;
   maxLength?: number;
+  accept?: string; // file
+  multiple?: boolean; // file
+  checked?: string[]; // checkboxes: initially ticked values
+  rows?: number;
 };
 
 type Props = {
@@ -46,6 +50,29 @@ export function SchemaForm({ action, fields, submitLabel, pendingLabel, hidden, 
         {fields.map((f) => {
           const err = state.fieldErrors?.[f.name];
           const span = columns === 2 && f.span === 2 ? "sm:col-span-2" : undefined;
+          if (f.type === "checkboxes") {
+            return (
+              <fieldset key={f.name} className={cn("space-y-1.5", span)}>
+                <legend className="mb-1 text-[13px] font-medium">{f.label}</legend>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {f.options?.map((o) => (
+                    <label key={o.value} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" name={f.name} value={o.value} defaultChecked={f.checked?.includes(o.value)} className="size-4 accent-[var(--color-accent)]" />{o.label}
+                    </label>
+                  ))}
+                </div>
+                {err ? <p className="text-[13px] text-danger">{err}</p> : f.hint ? <p className="text-[13px] text-faint">{f.hint}</p> : null}
+              </fieldset>
+            );
+          }
+          if (f.type === "file") {
+            return (
+              <Field key={f.name} label={f.label} name={f.name} error={err} hint={f.hint} className={span}>
+                {(p) => <input {...p} type="file" accept={f.accept} multiple={f.multiple}
+                  className="block w-full text-[13px] file:mr-3 file:rounded-[var(--radius-md)] file:border file:border-border-strong file:bg-surface file:px-3 file:py-1.5 file:text-[13px]" />}
+              </Field>
+            );
+          }
           if (f.type === "checkbox") {
             const checked = state.values && f.name in state.values ? state.values[f.name] === "on" : !!f.defaultValue;
             return (
@@ -63,7 +90,7 @@ export function SchemaForm({ action, fields, submitLabel, pendingLabel, hidden, 
                     {f.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </Select>
                 ) : f.type === "textarea" ? (
-                  <textarea {...p} defaultValue={String(value(f))} rows={4} placeholder={f.placeholder} maxLength={f.maxLength}
+                  <textarea {...p} defaultValue={String(value(f))} rows={f.rows ?? 4} placeholder={f.placeholder} maxLength={f.maxLength}
                     className="block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 py-2 text-sm placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20" />
                 ) : (
                   <Input {...p} type={f.type ?? "text"} defaultValue={String(value(f))} placeholder={f.placeholder} required={f.required} step={f.step} autoFocus={f.autoFocus} maxLength={f.maxLength} />

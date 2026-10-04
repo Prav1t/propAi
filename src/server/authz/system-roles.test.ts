@@ -27,6 +27,8 @@ describe("system roles", () => {
     for (const r of SYSTEM_ROLES.filter((x) => x.category === "resident")) {
       expect(r.scopeLevel).toBe("occupant");
       for (const p of ["resident.read", "unit.read", "workorder.read", "member.read", "property.manage"]) expect(r.permissions, r.key).not.toContain(p);
+      // residents never manage shared records (bookings, packages, messages, documents…)
+      expect(r.permissions.filter((p) => p.endsWith(".manage") || p.endsWith(".configure")), r.key).toEqual([]);
     }
   });
   it("keeps vendors minimal", () => {

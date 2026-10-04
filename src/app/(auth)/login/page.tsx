@@ -11,7 +11,7 @@ export const metadata = { title: "Sign in" };
 const DEMO = [
   ["admin@demo.test", "Org admin"], ["pm@demo.test", "Property manager (2 properties)"],
   ["concierge@demo.test", "Concierge"], ["facility@demo.test", "Facility manager (portfolio)"],
-  ["staff@demo.test", "Maintenance staff (1 building)"], ["resident@demo.test", "Resident"],
+  ["staff@demo.test", "Maintenance staff (1 building)"], ["resident@demo.test", "Resident"], ["owner@demo.test", "Owner (strata-style access)"],
   ["vendor@demo.test", "Vendor"], ["superadmin@demo.test", "Platform admin"],
 ];
 

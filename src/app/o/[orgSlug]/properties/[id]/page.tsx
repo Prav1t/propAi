@@ -83,6 +83,8 @@ export default async function PropertyPage({ params }: PageProps<"/o/[orgSlug]/p
               ["Portfolio", d.portfolio?.name],
               ["Address", address || null],
               ["Time zone", p.timezone.replace("_", " ")],
+              ["Emergency line", p.emergencyPhone],
+              ["Office hours", p.officeHours],
               ["Created", p.createdAt.toLocaleDateString("en-CA", { dateStyle: "medium" })],
             ]} />
           </Panel>
