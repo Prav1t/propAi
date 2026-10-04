@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, count, desc, eq, ilike, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
-  buildings, files, membershipScopes, memberships, properties, roles, slaPolicies, triageRules, units, users,
+  assets, buildings, files, membershipScopes, memberships, properties, roles, slaPolicies, triageRules, units, users,
   vendorProperties, vendors, workOrders,
 } from "../../db/schema";
 import { authorize, can, ForbiddenError, NotFoundError, type Principal } from "../../authz/authorize";
@@ -10,6 +10,8 @@ import type { Tx } from "../../db/client";
 import { auditAs, blankToNull, tenantTx, ValidationError, type TenantCtx } from "../context";
 import { pageArgs, scopeCondition, toPage, type Page } from "../scope";
 import { addTimeline, emit, listTimeline, nextNumber, type Visibility } from "../ops/core";
+import { closeDowntimeForWorkOrderTx, openDowntimeTx } from "../assets/service";
+import { onCallFor } from "../shifts/service";
 import {
   allowedTransitions, dueDates, evaluateTriage, isOpen, OPEN_STATUSES, PRIORITY_ORDER, slaFor, WO_CATEGORIES,
   type Priority, type TriageRule, type WoActor, type WoStatus,
@@ -54,7 +56,7 @@ function actorFor(a: WoAccess): WoActor | null {
 }
 
 // SQL predicate for the work orders a principal may list
-function visibleWhere(p: Principal): SQL {
+export function woVisibleWhere(p: Principal): SQL {
   const parts: (SQL | undefined)[] = [];
   if (p.permissions.has("workorder.read")) parts.push(scopeCondition(p, { property: workOrders.propertyId, building: workOrders.buildingId }) ?? sql`true`);
   if (p.permissions.has("workorder.read.assigned")) {
@@ -104,7 +106,7 @@ export async function listWorkOrders(
   return tenantTx(ctx, async (tx) => {
     const where = and(
       eq(workOrders.orgId, p.orgId),
-      visibleWhere(p),
+      woVisibleWhere(p),
       viewCond[view],
       opts.status ? eq(workOrders.status, opts.status) : undefined,
       opts.propertyId ? eq(workOrders.propertyId, opts.propertyId) : undefined,
@@ -159,6 +161,9 @@ export async function getWorkOrder(ctx: TenantCtx, id: string) {
       ? await tx.select({ name: users.name, membershipId: memberships.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(eq(memberships.id, wo.assignedMembershipId))
       : [];
     const [vendor] = wo.vendorId ? await tx.select({ id: vendors.id, name: vendors.name, phone: vendors.phone }).from(vendors).where(eq(vendors.id, wo.vendorId)) : [];
+    // the linked asset is shown to people who can work the job, not to residents
+    const [asset] = wo.assetId && (access.manage || access.staff || access.worker)
+      ? await tx.select({ id: assets.id, name: assets.name, status: assets.status }).from(assets).where(eq(assets.id, wo.assetId)) : [];
     const levels = visibleLevels(access);
     const timeline = await listTimeline(tx, p.orgId, "work_order", id, levels);
     const attachments = await tx.select().from(files)
@@ -169,7 +174,7 @@ export async function getWorkOrder(ctx: TenantCtx, id: string) {
     const showEntry = access.manage || access.staff || access.worker;
     return {
       workOrder: { ...wo, entryNotes: showEntry ? wo.entryNotes : null },
-      labels, submitterName: submitter?.name ?? null, assignee: assignee ?? null, vendor: vendor ?? null,
+      labels, submitterName: submitter?.name ?? null, assignee: assignee ?? null, vendor: vendor ?? null, asset: asset ?? null,
       timeline, attachments, access,
       transitions: actor ? allowedTransitions(wo.status as WoStatus, actor) : [],
       commentLevels: (access.manage || access.staff ? ["public", "vendor", "internal"] : access.worker ? ["public", "vendor"] : ["public"]) as Visibility[],
@@ -214,8 +219,11 @@ export const createWoSchema = z.object({
   area: optText(120),
   permissionToEnter: checkbox,
   entryNotes: optText(500),
+  assetId: z.union([z.literal(""), z.string().uuid()]).optional().transform((v) => v || null), // staff: equipment involved
+  assetDown: checkbox, // staff: the equipment is out of service
 });
-export type CreateWoInput = z.infer<typeof createWoSchema>;
+// asset fields are optional for internal callers (inspections, bookings, tests)
+export type CreateWoInput = Omit<z.infer<typeof createWoSchema>, "assetId" | "assetDown"> & { assetId?: string | null; assetDown?: boolean };
 
 export async function loadTriageRules(tx: Tx, orgId: string, propertyId: string): Promise<TriageRule[]> {
   return tx.select().from(triageRules).where(and(eq(triageRules.orgId, orgId), eq(triageRules.active, true), or(isNull(triageRules.propertyId), eq(triageRules.propertyId, propertyId))));
@@ -256,7 +264,12 @@ export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts
   if (!p.permissions.has("workorder.create")) throw new ForbiddenError();
   const isResident = p.role.category === "resident";
   return tenantTx(ctx, async (tx) => {
-    const loc = await resolveLocation(tx, p, input);
+    // equipment: staff only; with no other location given, the asset's own location is used
+    const [asset] = input.assetId && !isResident ? await tx.select().from(assets).where(and(eq(assets.orgId, p.orgId), eq(assets.id, input.assetId))) : [];
+    if (input.assetId && !isResident && !asset) throw new ValidationError("Asset not found.", "assetId");
+    const located = asset && !input.unitId && !input.buildingId && !input.propertyId ? { ...input, propertyId: asset.propertyId, buildingId: asset.buildingId } : input;
+    const loc = await resolveLocation(tx, p, located);
+    if (asset && asset.propertyId !== loc.propertyId) throw new ValidationError("That asset is at a different property.", "assetId");
     if (isResident) {
       // residents report issues in their own unit only
       if (!loc.unitId || !p.unitIds.has(loc.unitId)) throw new ForbiddenError("You can only submit requests for your own unit.");
@@ -281,6 +294,9 @@ export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts
       if (triage.assignMembershipId && opts2.staff.some((s) => s.membershipId === triage.assignMembershipId)) assignMembershipId = triage.assignMembershipId;
       if (triage.assignVendorId && opts2.vendors.some((v) => v.id === triage.assignVendorId)) assignVendorId = triage.assignVendorId;
     }
+    // emergencies nobody was assigned to go to whoever is on call at the property right now
+    const onCall = isEmergency && !assignMembershipId && !assignVendorId ? await onCallFor(tx, p.orgId, loc.propertyId, loc.buildingId) : null;
+    if (onCall) assignMembershipId = onCall.membershipId;
     const assigned = !!(assignMembershipId || assignVendorId);
     const [wo] = await tx.insert(workOrders).values({
       orgId: p.orgId, number, ...loc, area: input.area, category, priority, isEmergency, title: input.title, description: input.description,
@@ -290,6 +306,7 @@ export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts
       permissionToEnter: input.permissionToEnter, entryNotes: input.entryNotes,
       respondDueAt: due.respondDueAt, resolveDueAt: due.resolveDueAt,
       triageRuleId: triage.matched[0]?.id ?? null, sourceType: opts.sourceType ?? null, sourceId: opts.sourceId ?? null,
+      assetId: asset?.id ?? null,
     }).returning();
     await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "created", toStatus: "new", visibility: "public", body: `Request #${number} submitted.` });
     if (triage.matched.length) {
@@ -298,7 +315,12 @@ export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts
     }
     // configured guidance for the requester (e.g. "shut off the valve under the sink") stays on the record
     if (triage.instructions.length) await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "guidance", visibility: "public", body: triage.instructions.join("\n") });
-    if (assigned) await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "assigned", fromStatus: "new", toStatus: "assigned", visibility: "vendor", body: "Assigned automatically by triage rule." });
+    if (assigned) await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "assigned", fromStatus: "new", toStatus: "assigned", visibility: "vendor",
+      body: onCall ? `Emergency assigned to ${onCall.name}, on call for this property.` : "Assigned automatically by triage rule." });
+    if (asset && input.assetDown) {
+      const d = await openDowntimeTx(tx, asset, input.title, p.userId, wo.id);
+      if (d) await emit(tx, ctx, "asset.down", { assetId: asset.id, reason: input.title, workOrderId: wo.id });
+    }
     await auditAs(tx, ctx, "work_order.created", "work_order", wo.id, undefined, wo);
     await emit(tx, ctx, "workorder.created", { workOrderId: wo.id });
     if (assigned) await emit(tx, ctx, "workorder.assigned", { workOrderId: wo.id, membershipId: assignMembershipId, vendorId: assignVendorId });
@@ -343,6 +365,8 @@ export async function transitionWorkOrder(ctx: TenantCtx, id: string, input: z.i
     if (to === "cancelled") patch.cancelledAt = now;
     if (to === "in_progress" && (before.status === "completed" || before.status === "closed")) { patch.completedAt = null; patch.closedAt = null; }
     const [after] = await tx.update(workOrders).set(patch).where(eq(workOrders.id, id)).returning();
+    // finishing the job brings linked equipment back into service
+    if (before.assetId && ["completed", "closed", "cancelled"].includes(to)) await closeDowntimeForWorkOrderTx(tx, id, p.userId);
     const body = [input.note, to === "completed" && input.resolutionNotes ? `Resolution: ${input.resolutionNotes}` : null].filter(Boolean).join("\n") || null;
     await addTimeline(tx, ctx, { entityType: "work_order", entityId: id, kind: "status", fromStatus: before.status, toStatus: to, body, visibility: "public" });
     await auditAs(tx, ctx, "work_order.status_changed", "work_order", id, { status: before.status }, { status: to, cost: after.cost });

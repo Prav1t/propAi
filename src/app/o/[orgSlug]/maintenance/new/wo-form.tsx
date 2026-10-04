@@ -9,9 +9,10 @@ type Opt = { value: string; label: string };
 const area = "block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 py-2 text-sm placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20";
 
 // one form for residents (their unit) and staff (any building/unit in scope); photos upload with the request
-export function WorkOrderForm({ action, mode, units, buildings, categories, priorities }: {
+export function WorkOrderForm({ action, mode, units, buildings, categories, priorities, assets = [], defaults = {} }: {
   action: (s: ActionState, fd: FormData) => Promise<ActionState>;
   mode: "resident" | "staff"; units: Opt[]; buildings: Opt[]; categories: Opt[]; priorities: Opt[];
+  assets?: Opt[]; defaults?: { assetId?: string; buildingId?: string; category?: string };
 }) {
   const [state, formAction] = useActionState(action, initialActionState);
   const v = (k: string, d = "") => state.values?.[k] ?? d;
@@ -34,7 +35,7 @@ export function WorkOrderForm({ action, mode, units, buildings, categories, prio
         ) : (
           <>
             <Field label="Building" name="buildingId" error={err.buildingId}>
-              {(p) => <Select {...p} defaultValue={v("buildingId")}><option value="">Choose a building…</option>{buildings.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}</Select>}
+              {(p) => <Select {...p} defaultValue={v("buildingId", defaults.buildingId ?? "")}><option value="">{defaults.assetId ? "Where the asset is" : "Choose a building…"}</option>{buildings.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}</Select>}
             </Field>
             <Field label="Unit (optional)" name="unitNumber" error={err.unitNumber} hint="Leave blank for common areas.">
               {(p) => <Input {...p} defaultValue={v("unitNumber")} placeholder="e.g. 1204" />}
@@ -45,7 +46,7 @@ export function WorkOrderForm({ action, mode, units, buildings, categories, prio
           {(p) => <Input {...p} defaultValue={v("title")} placeholder="e.g. Kitchen sink leaking under the cabinet" maxLength={160} autoFocus />}
         </Field>
         <Field label="Category" name="category" error={err.category}>
-          {(p) => <Select {...p} defaultValue={v("category", "general")}>{categories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</Select>}
+          {(p) => <Select {...p} defaultValue={v("category", defaults.category ?? "general")}>{categories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</Select>}
         </Field>
         {mode === "staff" ? (
           <Field label="Priority" name="priority" error={err.priority} hint="Leave on automatic to apply your triage rules.">
@@ -56,6 +57,14 @@ export function WorkOrderForm({ action, mode, units, buildings, categories, prio
           <Field label="Area (optional)" name="area" error={err.area}>
             {(p) => <Input {...p} defaultValue={v("area")} placeholder="e.g. Lobby, P2 parkade, Roof" />}
           </Field>
+        ) : null}
+        {mode === "staff" && assets.length ? (
+          <>
+            <Field label="Equipment (optional)" name="assetId" error={err.assetId}>
+              {(p) => <Select {...p} defaultValue={v("assetId", defaults.assetId ?? "")}><option value="">None</option>{assets.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}</Select>}
+            </Field>
+            <label className="flex items-end gap-2 pb-2 text-sm"><input type="checkbox" name="assetDown" defaultChecked={v("assetDown") === "on"} className="size-4 accent-[var(--color-accent)]" /> Equipment is out of service</label>
+          </>
         ) : null}
         <Field label="Details" name="description" error={err.description} className="sm:col-span-2" hint="When did it start? Where exactly? Anything you've already tried?">
           {(p) => <textarea {...p} rows={4} defaultValue={v("description")} className={area} maxLength={5000} />}

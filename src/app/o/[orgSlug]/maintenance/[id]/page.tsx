@@ -29,6 +29,7 @@ export default async function WorkOrderPage({ params, searchParams }: PageProps<
   const base = `/o/${orgSlug}`;
   const a = d.access;
   const staffView = a.manage || a.staff;
+  const canSeeAssets = principal.permissions.has("asset.read") || principal.permissions.has("asset.manage");
   const open = !["completed", "closed", "cancelled"].includes(w.status);
   const overdue = open && !!w.resolveDueAt && w.resolveDueAt < new Date();
   const guidance = sp(q.created) ? [...d.timeline].reverse().find((t) => t.e.kind === "guidance")?.e.body : null;
@@ -73,13 +74,14 @@ export default async function WorkOrderPage({ params, searchParams }: PageProps<
               ["Scheduled visit", w.scheduledStart ? `${fmtDateTime(w.scheduledStart, tz)}${w.scheduledEnd ? ` – ${w.scheduledEnd.toLocaleTimeString("en-CA", { timeZone: tz, timeStyle: "short" })}` : ""}` : null],
               ["Assigned to", d.assignee?.name ?? null],
               ["Vendor", d.vendor ? `${d.vendor.name}${(a.manage || a.staff) && d.vendor.phone ? ` · ${d.vendor.phone}` : ""}` : null],
+              ...(d.asset ? [["Equipment", canSeeAssets ? <Link key="as" className="text-accent hover:underline" href={`${base}/assets/${d.asset.id}`}>{d.asset.name}</Link> : d.asset.name] as [string, React.ReactNode]] : []),
               ["Entry", w.permissionToEnter ? "May enter if nobody is home" : "Resident must be present"],
               ["Entry notes", w.entryNotes],
               ...(staffView ? [
                 ["Respond by", w.respondDueAt ? `${fmtDateTime(w.respondDueAt, tz)}${w.firstResponseAt ? " · responded" : ""}` : null],
                 ["Resolve by", w.resolveDueAt ? `${fmtDateTime(w.resolveDueAt, tz)}${open ? ` (${relative(w.resolveDueAt)})` : ""}` : null],
                 ["Cost", w.cost ? `$${Number(w.cost).toLocaleString("en-CA", { minimumFractionDigits: 2 })}` : null],
-                ["Source", w.sourceType === "inspection" && w.sourceId ? <Link key="s" className="text-accent hover:underline" href={`${base}/inspections/${w.sourceId}`}>Inspection follow-up</Link> : w.source],
+                ["Source", w.sourceType === "inspection" && w.sourceId ? <Link key="s" className="text-accent hover:underline" href={`${base}/inspections/${w.sourceId}`}>Inspection follow-up</Link> : w.sourceType === "pm_schedule" ? "Preventive maintenance schedule" : w.source],
               ] as [string, React.ReactNode][] : []),
             ]} />
           </Panel>

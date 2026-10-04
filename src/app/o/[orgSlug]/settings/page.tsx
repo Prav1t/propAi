@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getOrgContext } from "@/server/org-context";
-import { getOrganization, TIMEZONES } from "@/server/modules/organizations/service";
+import { getOrganization, orgSettings, TIMEZONES } from "@/server/modules/organizations/service";
 import { can } from "@/server/authz/authorize";
 import { Badge, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { GeneralForm } from "./general-form";
@@ -18,7 +18,7 @@ export default async function SettingsPage({ params }: PageProps<"/o/[orgSlug]/s
       <div className="space-y-6">
         <Panel>
           <PanelHeader title="General" />
-          <GeneralForm orgSlug={orgSlug} name={org.name} timezone={org.timezone} timezones={TIMEZONES} />
+          <GeneralForm orgSlug={orgSlug} name={org.name} timezone={org.timezone} timezones={TIMEZONES} parkingSecondReviewer={!!orgSettings(org.settings).parkingSecondReviewer} />
         </Panel>
         <Panel>
           <PanelHeader title="Workspace" />

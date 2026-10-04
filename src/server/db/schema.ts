@@ -606,13 +606,15 @@ export const workOrders = pgTable(
     cost: numeric("cost", { precision: 12, scale: 2 }),
     resolutionNotes: text("resolution_notes"),
     triageRuleId: uuid("triage_rule_id").references(() => triageRules.id, { onDelete: "set null" }),
-    sourceType: text("source_type"), // inspection | incident | complaint
+    sourceType: text("source_type"), // inspection | incident | complaint | booking | pm_schedule
     sourceId: uuid("source_id"),
+    assetId: uuid("asset_id").references((): AnyPgColumn => assets.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex("work_orders_org_number_uq").on(t.orgId, t.number),
+    index("work_orders_asset_idx").on(t.assetId),
     index("work_orders_org_status_idx").on(t.orgId, t.status),
     index("work_orders_property_idx").on(t.orgId, t.propertyId, t.createdAt),
     index("work_orders_vendor_idx").on(t.vendorId),
@@ -1216,4 +1218,320 @@ export const documentVersions = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("document_versions_uq").on(t.documentId, t.version)],
+);
+
+/* ───────────────────────── Front desk & facility (Iteration 5) ───────────────────────── */
+
+export const VISITOR_KINDS = ["guest", "delivery", "contractor", "service", "other"] as const;
+export const VISITOR_STATUSES = ["expected", "checked_in", "checked_out", "cancelled", "denied"] as const;
+
+// a guest pass: residents pre-register, the desk checks in by QR (token hash only) or by name/unit
+export const visitors = pgTable(
+  "visitors",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").notNull().references(() => buildings.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "cascade" }),
+    hostResidentId: uuid("host_resident_id").references(() => residents.id, { onDelete: "set null" }),
+    invitedByUserId: uuid("invited_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    company: text("company"),
+    phone: text("phone"),
+    kind: text("kind").notNull().default("guest"),
+    purpose: text("purpose"),
+    expectedFrom: ts("expected_from").notNull(),
+    expectedUntil: ts("expected_until").notNull(),
+    status: text("status").notNull().default("expected"),
+    passTokenHash: text("pass_token_hash"),
+    plate: text("plate"),
+    needsParking: boolean("needs_parking").notNull().default(false),
+    workOrderId: uuid("work_order_id").references(() => workOrders.id, { onDelete: "set null" }),
+    checkedInAt: ts("checked_in_at"),
+    checkedInByUserId: uuid("checked_in_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    checkedOutAt: ts("checked_out_at"),
+    checkedOutByUserId: uuid("checked_out_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    deniedReason: text("denied_reason"),
+    cancelledAt: ts("cancelled_at"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("visitors_org_idx").on(t.orgId, t.propertyId, t.status, t.expectedFrom),
+    index("visitors_unit_idx").on(t.orgId, t.unitId, t.expectedFrom),
+    uniqueIndex("visitors_pass_uq").on(t.passTokenHash),
+    check("visitors_kind_ck", sql`${t.kind} in ('guest','delivery','contractor','service','other')`),
+    check("visitors_status_ck", sql`${t.status} in ('expected','checked_in','checked_out','cancelled','denied')`),
+    check("visitors_window_ck", sql`${t.expectedUntil} > ${t.expectedFrom}`),
+  ],
+);
+
+export const PARKING_SPACE_KINDS = ["resident", "visitor", "accessible", "ev", "loading", "motorcycle", "reserved"] as const;
+export const PARKING_VIOLATION_KINDS = ["no_permit", "expired_permit", "wrong_space", "visitor_overstay", "fire_lane", "accessible", "blocking", "other"] as const;
+
+export const parkingSpaces = pgTable(
+  "parking_spaces",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    code: text("code").notNull(), // stored upper-case
+    level: text("level"),
+    kind: text("kind").notNull().default("resident"),
+    assignedUnitId: uuid("assigned_unit_id").references(() => units.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("available"),
+    notes: text("notes"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("parking_spaces_code_uq").on(t.propertyId, t.code),
+    index("parking_spaces_org_idx").on(t.orgId, t.propertyId, t.kind),
+    index("parking_spaces_unit_idx").on(t.assignedUnitId),
+    check("parking_spaces_kind_ck", sql`${t.kind} in ('resident','visitor','accessible','ev','loading','motorcycle','reserved')`),
+    check("parking_spaces_status_ck", sql`${t.status} in ('available','out_of_service')`),
+  ],
+);
+
+// residents' registered vehicles; a plate can be active on only one record per organization
+export const vehicles = pgTable(
+  "vehicles",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id").notNull().references(() => units.id, { onDelete: "cascade" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    plate: text("plate").notNull(), // normalised: upper-case letters and digits
+    region: text("region"),
+    make: text("make"),
+    model: text("model"),
+    color: text("color"),
+    active: boolean("active").notNull().default(true),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("vehicles_plate_active_uq").on(t.orgId, t.plate).where(sql`${t.active}`),
+    index("vehicles_unit_idx").on(t.orgId, t.unitId),
+  ],
+);
+
+export const parkingPermits = pgTable(
+  "parking_permits",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull().default("resident"),
+    plate: text("plate").notNull(),
+    vehicleId: uuid("vehicle_id").references(() => vehicles.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    spaceId: uuid("space_id").references(() => parkingSpaces.id, { onDelete: "set null" }),
+    visitorId: uuid("visitor_id").references(() => visitors.id, { onDelete: "set null" }),
+    validFrom: ts("valid_from").notNull(),
+    validUntil: ts("valid_until"), // null = open-ended
+    status: text("status").notNull().default("active"),
+    notes: text("notes"),
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    revokedAt: ts("revoked_at"),
+    revokedByUserId: uuid("revoked_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    revokeReason: text("revoke_reason"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("parking_permits_number_uq").on(t.orgId, t.number),
+    index("parking_permits_plate_idx").on(t.orgId, t.plate),
+    index("parking_permits_unit_idx").on(t.orgId, t.unitId),
+    check("parking_permits_kind_ck", sql`${t.kind} in ('resident','visitor','contractor','staff')`),
+    check("parking_permits_status_ck", sql`${t.status} in ('active','revoked')`),
+    check("parking_permits_window_ck", sql`${t.validUntil} is null or ${t.validUntil} > ${t.validFrom}`),
+  ],
+);
+
+// reports and detections are never conclusions: a person reviews before any notice goes out
+export const parkingViolations = pgTable(
+  "parking_violations",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    spaceId: uuid("space_id").references(() => parkingSpaces.id, { onDelete: "set null" }),
+    plate: text("plate").notNull(),
+    location: text("location"),
+    kind: text("kind").notNull(),
+    description: text("description"),
+    observedAt: ts("observed_at").notNull(),
+    source: text("source").notNull().default("staff"),
+    confidence: numeric("confidence", { precision: 4, scale: 3 }), // detections only
+    status: text("status").notNull().default("reported"),
+    reportedByUserId: uuid("reported_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    vehicleId: uuid("vehicle_id").references(() => vehicles.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    hadValidPermit: boolean("had_valid_permit"),
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: ts("reviewed_at"),
+    reviewNote: text("review_note"),
+    warnedAt: ts("warned_at"),
+    warningText: text("warning_text"),
+    resolvedAt: ts("resolved_at"),
+    resolution: text("resolution"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("parking_violations_number_uq").on(t.orgId, t.number),
+    index("parking_violations_org_idx").on(t.orgId, t.propertyId, t.status),
+    index("parking_violations_plate_idx").on(t.orgId, t.plate),
+    index("parking_violations_unit_idx").on(t.orgId, t.unitId),
+    check("parking_violations_kind_ck", sql`${t.kind} in ('no_permit','expired_permit','wrong_space','visitor_overstay','fire_lane','accessible','blocking','other')`),
+    check("parking_violations_source_ck", sql`${t.source} in ('staff','resident','detection')`),
+    check("parking_violations_status_ck", sql`${t.status} in ('reported','confirmed','dismissed','warned','resolved')`),
+  ],
+);
+
+export const SHIFT_POSITIONS = ["front_desk", "security", "maintenance", "cleaning", "management", "other"] as const;
+
+export const shifts = pgTable(
+  "shifts",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    position: text("position").notNull().default("front_desk"),
+    startsAt: ts("starts_at").notNull(),
+    endsAt: ts("ends_at").notNull(),
+    onCall: boolean("on_call").notNull().default(false),
+    notes: text("notes"),
+    status: text("status").notNull().default("scheduled"),
+    clockedInAt: ts("clocked_in_at"),
+    clockedOutAt: ts("clocked_out_at"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("shifts_org_idx").on(t.orgId, t.propertyId, t.startsAt),
+    index("shifts_member_idx").on(t.membershipId, t.startsAt),
+    check("shifts_position_ck", sql`${t.position} in ('front_desk','security','maintenance','cleaning','management','other')`),
+    check("shifts_status_ck", sql`${t.status} in ('scheduled','cancelled')`),
+    check("shifts_window_ck", sql`${t.endsAt} > ${t.startsAt}`),
+  ],
+);
+
+export const shiftHandoffs = pgTable(
+  "shift_handoffs",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    shiftId: uuid("shift_id").references(() => shifts.id, { onDelete: "set null" }),
+    authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
+    notes: text("notes").notNull(),
+    snapshot: jsonb("snapshot").notNull().default({}),
+    acknowledgedByUserId: uuid("acknowledged_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    acknowledgedAt: ts("acknowledged_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("shift_handoffs_org_idx").on(t.orgId, t.propertyId, t.createdAt)],
+);
+
+export const ASSET_CATEGORIES = ["hvac", "elevator", "plumbing", "electrical", "fire_safety", "roofing", "security", "generator", "pool", "appliance", "doors_access", "other"] as const;
+export const ASSET_STATUSES = ["operational", "needs_attention", "down", "retired"] as const;
+
+export const assets = pgTable(
+  "assets",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    unitId: uuid("unit_id").references(() => units.id, { onDelete: "set null" }),
+    location: text("location"),
+    name: text("name").notNull(),
+    tag: text("tag"),
+    category: text("category").notNull().default("other"),
+    make: text("make"),
+    model: text("model"),
+    serialNumber: text("serial_number"),
+    installedOn: date("installed_on"),
+    warrantyUntil: date("warranty_until"),
+    expectedLifeYears: integer("expected_life_years"),
+    criticality: text("criticality").notNull().default("medium"),
+    status: text("status").notNull().default("operational"),
+    vendorId: uuid("vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    replacementCost: numeric("replacement_cost", { precision: 12, scale: 2 }),
+    notes: text("notes"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("assets_tag_uq").on(t.orgId, t.tag),
+    index("assets_org_idx").on(t.orgId, t.propertyId, t.status),
+    index("assets_category_idx").on(t.orgId, t.category),
+    check("assets_criticality_ck", sql`${t.criticality} in ('low','medium','high','critical')`),
+    check("assets_status_ck", sql`${t.status} in ('operational','needs_attention','down','retired')`),
+  ],
+);
+
+// calendar-based preventive maintenance: the worker opens a work order lead_days before next_due_on
+export const pmSchedules = pgTable(
+  "pm_schedules",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    assetId: uuid("asset_id").notNull().references(() => assets.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    instructions: text("instructions"),
+    intervalUnit: text("interval_unit").notNull().default("month"),
+    intervalCount: integer("interval_count").notNull().default(1),
+    nextDueOn: date("next_due_on").notNull(),
+    leadDays: integer("lead_days").notNull().default(7),
+    priority: text("priority").notNull().default("normal"),
+    assignVendorId: uuid("assign_vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    assignMembershipId: uuid("assign_membership_id").references(() => memberships.id, { onDelete: "set null" }),
+    active: boolean("active").notNull().default(true),
+    lastGeneratedAt: ts("last_generated_at"),
+    lastWorkOrderId: uuid("last_work_order_id").references((): AnyPgColumn => workOrders.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("pm_schedules_due_idx").on(t.active, t.nextDueOn),
+    index("pm_schedules_asset_idx").on(t.orgId, t.assetId),
+    check("pm_interval_unit_ck", sql`${t.intervalUnit} in ('day','week','month','year')`),
+    check("pm_interval_count_ck", sql`${t.intervalCount} between 1 and 366`),
+    check("pm_lead_days_ck", sql`${t.leadDays} between 0 and 90`),
+    check("pm_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
+  ],
+);
+
+export const assetDowntime = pgTable(
+  "asset_downtime",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    assetId: uuid("asset_id").notNull().references(() => assets.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    startedAt: ts("started_at").notNull(),
+    endedAt: ts("ended_at"),
+    reason: text("reason").notNull(),
+    workOrderId: uuid("work_order_id").references((): AnyPgColumn => workOrders.id, { onDelete: "set null" }),
+    startedByUserId: uuid("started_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    endedByUserId: uuid("ended_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("asset_downtime_asset_idx").on(t.orgId, t.assetId, t.startedAt),
+    uniqueIndex("asset_downtime_open_uq").on(t.assetId).where(sql`${t.endedAt} is null`),
+    check("asset_downtime_window_ck", sql`${t.endedAt} is null or ${t.endedAt} >= ${t.startedAt}`),
+  ],
 );

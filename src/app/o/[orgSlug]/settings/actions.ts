@@ -10,8 +10,8 @@ import { formValues, str, toActionError, zodFieldErrors, type ActionState } from
 // every action re-resolves the principal from the session; the slug alone grants nothing
 export async function updateOrgSettingsAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const slug = str(fd, "orgSlug");
-  const values = formValues(fd, ["name", "timezone"]);
-  const parsed = orgSettingsSchema.safeParse({ name: str(fd, "name"), timezone: str(fd, "timezone") });
+  const values = formValues(fd, ["name", "timezone", "parkingSecondReviewer"]);
+  const parsed = orgSettingsSchema.safeParse({ name: str(fd, "name"), timezone: str(fd, "timezone"), parkingSecondReviewer: fd.get("parkingSecondReviewer") === "on" });
   if (!parsed.success) return { fieldErrors: zodFieldErrors(parsed.error), values };
   try {
     const { ctx } = await getOrgContext(slug);

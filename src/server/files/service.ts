@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { complaints, documents, files, incidents, inspections, packages, workOrders } from "../db/schema";
+import { assets, complaints, documents, files, incidents, inspections, packages, parkingViolations, workOrders } from "../db/schema";
 import { can, ForbiddenError, NotFoundError, type Principal } from "../authz/authorize";
 import type { Tx } from "../db/client";
 import { auditAs, tenantTx, ValidationError, type TenantCtx } from "../modules/context";
@@ -11,7 +11,7 @@ import { canManageDocument, canReadDocument } from "../modules/documents/access"
 import { blobStore, fileScanner } from "./storage";
 import { DOCUMENT_TYPES, MAX_BYTES, MEDIA_TYPES, sniff } from "./sniff";
 
-export const ATTACHABLE = ["work_order", "incident", "complaint", "inspection", "package"] as const;
+export const ATTACHABLE = ["work_order", "incident", "complaint", "inspection", "package", "parking_violation", "asset"] as const;
 export type Attachable = (typeof ATTACHABLE)[number];
 export type FileOwner = Attachable | "document";
 export const MAX_FILES_PER_UPLOAD = 5;
@@ -50,6 +50,19 @@ async function levelsFor(tx: Tx, p: Principal, entityType: FileOwner, entityId: 
     // residents see the arrival photo of their own unit's packages (signatures are internal)
     return p.permissions.has("package.read.own") && p.unitIds.has(k.unitId) ? { read: ["public"], write: [] } : null;
   }
+  if (entityType === "parking_violation") {
+    const [v] = await tx.select().from(parkingViolations).where(and(eq(parkingViolations.id, entityId), eq(parkingViolations.orgId, p.orgId)));
+    if (!v) return null;
+    // evidence stays with parking staff; residents get the notice text only
+    return can(p, "parking.manage", { orgId: p.orgId, propertyId: v.propertyId, buildingId: v.buildingId }) ? { read: ALL, write: ["internal"] } : null;
+  }
+  if (entityType === "asset") {
+    const [a] = await tx.select().from(assets).where(and(eq(assets.id, entityId), eq(assets.orgId, p.orgId)));
+    if (!a) return null;
+    const r = { orgId: p.orgId, propertyId: a.propertyId, buildingId: a.buildingId };
+    if (can(p, "asset.manage", r)) return { read: ALL, write: ["internal"] };
+    return can(p, "asset.read", r) ? { read: ALL, write: [] } : null;
+  }
   if (entityType === "document") {
     const [d] = await tx.select().from(documents).where(and(eq(documents.id, entityId), eq(documents.orgId, p.orgId)));
     if (!d || !canReadDocument(p, d)) return null;
@@ -73,7 +86,7 @@ export async function prepareFiles(orgId: string, owner: FileOwner, uploads: Fil
     const bytes = new Uint8Array(await f.arrayBuffer());
     const kind = sniff(bytes, f.name);
     if (!kind || !allowed.includes(kind.mime)) {
-      const list = allowed === DOCUMENT_TYPES ? "PDF, Word, Excel, PowerPoint, text, CSV, JPG or PNG" : "JPG, PNG, WebP, GIF, HEIC, PDF, MP4 or MOV";
+      const list = allowed.includes(DOCUMENT_TYPES[1]) ? "PDF, Word, Excel, PowerPoint, text, CSV, JPG or PNG" : "JPG, PNG, WebP, GIF, HEIC, PDF, MP4 or MOV";
       throw new ValidationError(`“${f.name}” isn't a supported file. Use ${list}.`, "files");
     }
     if (bytes.length > MAX_BYTES[kind.mime]) throw new ValidationError(`“${f.name}” is too large (max ${Math.round(MAX_BYTES[kind.mime] / 1_000_000)} MB).`, "files");
@@ -112,10 +125,11 @@ export async function uploadFiles(ctx: TenantCtx, entityType: Attachable, entity
   const levels = await tenantTx(ctx, (tx) => levelsFor(tx, p, entityType, entityId));
   if (!levels) throw new NotFoundError();
   if (!levels.write.includes(visibility)) throw new ForbiddenError("You can't share files at that visibility.");
-  const prepared = await prepareFiles(p.orgId, entityType, uploads);
+  // asset records also hold manuals and warranty papers
+  const prepared = await prepareFiles(p.orgId, entityType, uploads, entityType === "asset" ? [...new Set([...MEDIA_TYPES, ...DOCUMENT_TYPES])] : MEDIA_TYPES);
   return withStoredBlobs(prepared, () => tenantTx(ctx, async (tx) => {
     const rows = await tx.insert(files).values(fileRows(prepared, p, entityType, entityId, visibility)).returning();
-    if (entityType !== "package") await addTimeline(tx, ctx, { entityType, entityId, kind: "attachment", visibility, body: `Attached ${rows.map((r) => r.filename).join(", ")}.` });
+    if (!["package", "parking_violation", "asset"].includes(entityType)) await addTimeline(tx, ctx, { entityType, entityId, kind: "attachment", visibility, body: `Attached ${rows.map((r) => r.filename).join(", ")}.` });
     await auditAs(tx, ctx, "file.uploaded", entityType, entityId, undefined, rows.map((r) => ({ id: r.id, filename: r.filename, size: r.sizeBytes, type: r.contentType })));
     return rows;
   }));

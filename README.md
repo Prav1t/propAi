@@ -2,11 +2,12 @@
 
 AI-native operations platform for property managers, strata/HOAs, facility teams, concierge desks and residents. The assistant, **[YOUR AI ASSISTANT NAME]**, acts through typed, permission-checked tools with approvals and a full audit trail (arriving in Iterations 6–8).
 
-> **Status: Iteration 4 of 13 complete.**
+> **Status: Iteration 5 of 13 complete.**
 > - **Iteration 1 — foundation:** authentication with MFA, organizations, role-based access scoped to portfolio/property/building/unit, Postgres row-level-security tenant isolation, invitations, settings, audit log.
 > - **Iteration 2 — portfolio core:** portfolios, properties, buildings (stacking plan, bulk unit generation), floors, units, residents (move-in/out history, resident-app invites), staff directory, vendors (contacts, property approvals, vendor-portal invites), permission-aware full-text search and a Cmd/Ctrl-K command palette.
 > - **Iteration 3 — operations core:** maintenance work orders (triage rules, SLA targets and monitor, vendor portal), tasks, inspections, incidents, complaints, file attachments, in-app + email notifications through a transactional outbox.
 > - **Iteration 4 — community & resident experience:** amenities with a booking rules engine and approvals, packages with pickup codes and signatures, announcements, resident ↔ management messaging with templates, a versioned document library, and a mobile-first resident app.
+> - **Iteration 5 — front desk & facility:** a front desk console, visitors with QR guest passes, parking (spaces, vehicles, permits, human-reviewed violation reports), staff shifts with on-call routing and handoffs, an asset registry with preventive maintenance and downtime, and a unified calendar.
 >
 > See [`docs/roadmap.md`](docs/roadmap.md) and [`docs/iterations/`](docs/iterations/).
 
@@ -18,7 +19,8 @@ A modular monolith: **Next.js 16** (App Router, React 19, TypeScript) serves the
 src/
   app/                 routes: (auth) pages, /orgs, /onboarding, /o/[orgSlug]/…, /account, /admin, /api/health
   components/          ui/ design system, shell/ navigation, ops/ timeline, attachments, status forms, bar lists,
-                       community/ booking form, day timeline, package intake, signature pad, message composer
+                       community/ booking form, day timeline, package intake, signature pad, message composer,
+                       frontdesk/ visitor form, pass card, pass scanner, plate lookup, handoff snapshot
   config/              brand placeholders, navigation
   server/
     auth/              passwords (argon2id), sessions, TOTP MFA, rate limiting, crypto
@@ -27,14 +29,15 @@ src/
     modules/           organizations, members, portfolio, people, vendors, search,
                        maintenance (rules, triage, SLA, config), tasks, inspections, incidents, complaints,
                        notifications (outbox delivery, inbox, preferences), ops (timeline, counters, KPIs),
-                       amenities (booking rules engine), packages, announcements, messaging, documents
+                       amenities (booking rules engine), packages, announcements, messaging, documents,
+                       visitors (guest passes), parking, shifts (on-call, handoffs), assets (PM, downtime), calendar
                        scope.ts: SQL scope filters, search-query sanitizer, pagination
     files/             upload sniffing, BlobStore (local | S3), permission-checked downloads
-    worker.ts          background tick: SLA monitor, scheduled announcements, package reminders, outbox delivery
+    worker.ts          background tick: SLA monitor, scheduled announcements, package reminders, preventive maintenance, outbox delivery
     mail/              Mailer (console | SMTP) + templates
     audit.ts           audit writer (same transaction as the change)
 drizzle/               SQL migrations (incl. RLS policies)
-scripts/               migrate, seed (+ seed-ops, seed-community), reset, worker
+scripts/               migrate, seed (+ seed-ops, seed-community, seed-facility), reset, worker
 tests/                 integration (real Postgres), e2e (Playwright); unit tests live next to code
 docs/                  research, requirements, architecture, AI design, schema, roadmap
 ```
@@ -91,9 +94,9 @@ Password for every account: `DemoPass!2026`. These are created by `npm run db:se
 |---|---|---|
 | `admin@demo.test` | Organization Admin (Pacific Properties) + Council Member (Northshore) | Everything in Pacific; demonstrates org switching |
 | `pm@demo.test` | Property Manager | Harbour Centre + Fraser Towers only |
-| `facility@demo.test` | Facility Manager | "Mixed-Use & Commercial" portfolio (Fraser Towers) |
+| `facility@demo.test` | Facility Manager (Daniel Okafor) | "Mixed-Use & Commercial" portfolio (Fraser Towers): assets, PM, shifts |
 | `staff@demo.test` | Maintenance Staff | Harbour Centre, Main Tower building only |
-| `concierge@demo.test` | Concierge | Fraser Towers |
+| `concierge@demo.test` | Concierge (Aisha Rahman) | Fraser Towers front desk — always on the shift that's happening now in the demo data |
 | `council@demo.test` | Strata Council Member | Pacific Heights |
 | `resident@demo.test` | Resident (Emma Tremblay) | Own unit: Fraser Towers, Tower B #1204 |
 | `owner@demo.test` | Owner (Noah Williams) | Own unit: Fraser Towers, Tower A #805 — sees owners-only documents and amenities |
@@ -101,7 +104,7 @@ Password for every account: `DemoPass!2026`. These are created by `npm run db:se
 | `admin@northshore.test` | Organization Admin (Northshore Strata) | Second tenant, used to prove isolation |
 | `superadmin@demo.test` | Platform super admin | `/admin` console |
 
-Demo org **Pacific Properties Management**: 4 properties (Harbour Centre, Pacific Heights, Fraser Towers, Kingsway Residences) in 2 portfolios, 6 buildings, 339 units, ~550 residents (incl. move-out history), 8 vendors with contacts and property approvals, staff profiles — plus ~175 work orders over 90 days (with SLA history, costs and timelines), SLA targets and 9 triage rules, 12 tasks, 3 inspection templates and 8 inspections, 12 incidents, 23 complaints, 8 amenities with ~210 bookings and closures, 44 packages, 7 announcements, resident conversations and reply templates, 10 documents (real PDFs), and notifications. Data is deterministic apart from dates, which are relative to today.
+Demo org **Pacific Properties Management**: 4 properties (Harbour Centre, Pacific Heights, Fraser Towers, Kingsway Residences) in 2 portfolios, 6 buildings, 339 units, ~550 residents (incl. move-out history), 8 vendors with contacts and property approvals, staff profiles — plus ~175 work orders over 90 days (with SLA history, costs and timelines), SLA targets and 9 triage rules, 12 tasks, 3 inspection templates and 8 inspections, 12 incidents, 23 complaints, 8 amenities with ~210 bookings and closures, 44 packages, 7 announcements, resident conversations and reply templates, 10 documents (real PDFs), ~90 visitors (expected, on site and a month of history), 223 parking spaces with ~115 registered vehicles, permits and violation reports (including a camera detection to review), ~170 shifts (front desk, security, maintenance, after-hours on call) with handoffs, 27 assets with PM schedules, a year of PM history and downtime, and notifications. Six extra staff members without logins (`*@staff.example.test`) make the schedules realistic. Data is deterministic apart from dates and the current shift, which are relative to when you seed.
 
 Things to try:
 
@@ -112,6 +115,11 @@ Things to try:
 - **Packages:** as `concierge@demo.test` → *Packages* → pick Tower B, unit 1204, type or scan a tracking number (the carrier is detected) → *Log package*. The resident sees it on their home screen with a 6-digit pickup code; the desk checks that code (a wrong one is refused) and can take an on-screen signature, for one package or several at once.
 - **Announcements and documents:** as `pm@demo.test` → *Announcements → New* → target Fraser Towers · Tower A, schedule it or publish now. `owner@demo.test` (Tower A) sees it plus the owners-only bylaws; `resident@demo.test` (Tower B) sees neither. Upload a new version of a document and the old file becomes staff-only.
 - **Messages:** as the resident → *Message management*; as `concierge@demo.test` → *Messages → Needs reply* → insert the "Request received" template (variables filled from the thread), add an internal note the resident never sees.
+- **Guest passes:** as `resident@demo.test` → *Invite a guest* → you get a QR pass with a link to send. Open the link in a private window — that's the guest's view (first name, building, time; nothing about the host). As `concierge@demo.test` the dashboard *is* the front desk: paste the link into *Guest pass* (or scan the QR with a phone camera), check them in with a free visitor parking space, and the resident is notified. Checking out ends the pass and the parking permit.
+- **Parking:** as the concierge → *Parking* → review the camera detection (it's labelled with its confidence and can only be confirmed or dismissed by a person). Report a violation for plate `WLM805` → confirm → issue a notice → `owner@demo.test` sees it under *My parking*. *Plate lookup* shows registration, permits, visitors and past reports for a plate.
+- **Shifts and on-call:** *Shifts* shows the week's schedule and who's on now. Write a *Shift handoff* — it attaches the open items automatically — and acknowledge it as another user. Outside weekday hours Tomás Reyes is on call at Fraser Towers, so an emergency request there with no triage assignment goes straight to him.
+- **Facility:** as `pm@demo.test` → *Assets* → *Rooftop unit RTU-4* shows six reactive requests in 90 days with downtime and cost from real rows. As `facility@demo.test` → *Emergency generator* → the worker has already opened its monthly load-test work order from the PM schedule (or click *Create now*). Mark an asset out of service, or create a work order with *Equipment is out of service* ticked — finishing the job brings it back.
+- **Calendar:** *Calendar* merges scheduled work, inspections, PM due dates, bookings, visitors, shifts and task due dates in day/week/month/agenda views, filtered to what you're allowed to see.
 - Press **Ctrl/Cmd-K** for navigation and quick actions ("Create work order", "Show overdue work orders", "Report incident"…); sign in as `pm@demo.test` and notice Pacific Heights has disappeared everywhere.
 
 ## Tests
@@ -132,7 +140,8 @@ E2E notes: sign-in is rate-limited per IP, so the Playwright web server is start
 See [`.env.example`](.env.example). Required: `DATABASE_URL`, `APP_ENCRYPTION_KEY`; `MIGRATION_DATABASE_URL` for migrate/seed. `TRUST_PROXY=true` only behind a reverse proxy that sets `X-Forwarded-For`.
 
 - **Attachments:** `FILE_STORAGE=local` (default; files under `FILE_STORAGE_DIR`, default `./.data/uploads`, a named volume in Docker) or `FILE_STORAGE=s3` with `S3_BUCKET`, `S3_REGION`, optional `S3_ENDPOINT` for MinIO/R2, `S3_PUBLIC_ENDPOINT` when browsers reach the bucket on a different host than the app, `S3_SSE=none` for MinIO without a KMS, and credentials from the standard AWS chain. `S3_TEST_ENDPOINT=http://… npm run test:integration` also runs the S3 adapter test against that server.
-- **Background worker:** notification delivery, the SLA monitor, scheduled announcements and package reminders (`PACKAGE_REMINDER_DAYS`, default 3) run in-process every `WORKER_INTERVAL_MS` (30 s). For several app instances, set `DISABLE_INPROCESS_WORKER=true` on them and run one `npm run worker` process (or `npm run worker -- --once` from a scheduler).
+- **Guest pass links** are built from `APP_URL`, so set it to the public HTTPS origin in production.
+- **Background worker:** notification delivery, the SLA monitor, scheduled announcements, preventive-maintenance work orders and package reminders (`PACKAGE_REMINDER_DAYS`, default 3) run in-process every `WORKER_INTERVAL_MS` (30 s). For several app instances, set `DISABLE_INPROCESS_WORKER=true` on them and run one `npm run worker` process (or `npm run worker -- --once` from a scheduler).
 
 ## Production deployment (current state)
 

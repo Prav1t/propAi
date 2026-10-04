@@ -9,6 +9,8 @@ import { listBookings } from "@/server/modules/amenities/service";
 import { announcementFeed } from "@/server/modules/announcements/service";
 import { canUseMessages, listThreads } from "@/server/modules/messaging/service";
 import { canUseDocuments, listDocuments } from "@/server/modules/documents/service";
+import { canInviteVisitors, myUpcomingGuests } from "@/server/modules/visitors/service";
+import { fmtRange } from "@/lib/time";
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { WoMiniList } from "@/components/ops/wo-mini-list";
 import { Icon } from "@/components/shell/icons";
@@ -20,7 +22,7 @@ const More = ({ href, children }: { href: string; children: React.ReactNode }) =
 
 // mobile-first home for residents: what needs attention first, then quick actions, then the rest
 export async function ResidentHome({ ctx, principal: p, first, base }: { ctx: TenantCtx; principal: Principal & { orgName: string; orgTimezone: string }; first: string; base: string }) {
-  const [units, props, reqs, pkgs, bookings, news, threads, docs] = await Promise.all([
+  const [units, props, reqs, pkgs, bookings, news, threads, docs, guests] = await Promise.all([
     listMyUnits(ctx), myPropertyInfo(ctx),
     canListWorkOrders(p) ? listWorkOrders(ctx, { view: "open", pageSize: 3 }) : null,
     canUsePackages(p) ? listPackages(ctx, { view: "waiting", pageSize: 5 }) : null,
@@ -28,13 +30,14 @@ export async function ResidentHome({ ctx, principal: p, first, base }: { ctx: Te
     announcementFeed(ctx, { limit: 3 }),
     canUseMessages(p) ? listThreads(ctx, { view: "all" }) : null,
     canUseDocuments(p) ? listDocuments(ctx, { importantOnly: true, pageSize: 4 }) : null,
+    canInviteVisitors(p) ? myUpcomingGuests(ctx) : null,
   ]);
   const unreadThreads = threads?.rows.filter((t) => t.unread && t.lastFromStaff) ?? [];
   const actions = [
     p.permissions.has("workorder.create") && units.length ? { href: `${base}/maintenance/new`, icon: "wrench", label: "Report a problem" } : null,
     p.permissions.has("booking.create") ? { href: `${base}/amenities`, icon: "calendar", label: "Book an amenity" } : null,
     canUseMessages(p) ? { href: `${base}/messages/new`, icon: "message", label: "Message management" } : null,
-    canUseDocuments(p) ? { href: `${base}/documents`, icon: "file", label: "Building documents" } : null,
+    canInviteVisitors(p) ? { href: `${base}/visitors/new`, icon: "badge", label: "Invite a guest" } : canUseDocuments(p) ? { href: `${base}/documents`, icon: "file", label: "Building documents" } : null,
   ].filter(Boolean) as { href: string; icon: string; label: string }[];
   const tz = p.orgTimezone;
   return (
@@ -111,6 +114,22 @@ export async function ResidentHome({ ctx, principal: p, first, base }: { ctx: Te
                 ))}
               </ul>
             )}
+          </Panel>
+        ) : null}
+        {guests && guests.length ? (
+          <Panel>
+            <PanelHeader title="Your guests" actions={<More href={`${base}/visitors`}>All guests</More>} />
+            <ul className="divide-y divide-border">
+              {guests.map((g) => (
+                <li key={g.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <Link className="min-w-0" href={`${base}/visitors/${g.id}`}>
+                    <span className="block truncate text-sm font-medium hover:underline">{g.name}</span>
+                    <span className="block text-[13px] text-muted">{fmtRange(g.expectedFrom, g.expectedUntil, g.tz)}</span>
+                  </Link>
+                  {g.status === "checked_in" ? <Badge tone="success">Arrived</Badge> : null}
+                </li>
+              ))}
+            </ul>
           </Panel>
         ) : null}
         {docs && docs.rows.length ? (

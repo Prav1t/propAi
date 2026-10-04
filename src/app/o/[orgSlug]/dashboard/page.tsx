@@ -14,6 +14,11 @@ import { ResidentHome } from "./resident-home";
 import { packageStats } from "@/server/modules/packages/service";
 import { bookingStats } from "@/server/modules/amenities/service";
 import { messageBadgeCount } from "@/server/modules/messaging/service";
+import { visitorStats } from "@/server/modules/visitors/service";
+import { parkingStats } from "@/server/modules/parking/service";
+import { facilityStats } from "@/server/modules/assets/service";
+import { hours } from "@/lib/facility-labels";
+import { DeskConsole } from "../desk/desk-console";
 
 function StatLink({ href, ...p }: { href: string; label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return <Link href={href} className="block rounded-[var(--radius-lg)] focus-visible:outline-2 [&>div]:hover:border-border-strong"><Stat {...p} /></Link>;
@@ -32,6 +37,8 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
 
   const base = `/o/${orgSlug}`;
   if (principal.role.scopeLevel === "occupant") return <ResidentHome ctx={ctx} principal={principal} first={first} base={base} />;
+  // the front desk's home is the desk console
+  if (["concierge", "security"].includes(principal.role.key)) return <DeskConsole ctx={ctx} principal={principal} orgSlug={orgSlug} title={`Hi ${first}`} />;
 
   if (!principal.permissions.has("property.read")) {
     const jobs = canListWorkOrders(principal) ? await listWorkOrders(ctx, { view: "open", pageSize: 10 }) : null;
@@ -54,7 +61,8 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   const wo = kpis.workOrders;
   const assignedToMe = principal.permissions.has("workorder.read.assigned") || principal.permissions.has("workorder.manage") ? await listWorkOrders(ctx, { view: "mine", pageSize: 6 }) : null;
   const myTasks = canUseTasks(principal) ? await listTasks(ctx, { view: "mine" }) : null;
-  const [pkg, bk, msgs] = await Promise.all([packageStats(ctx), bookingStats(ctx), principal.permissions.has("message.manage") ? messageBadgeCount(ctx) : Promise.resolve(null)]);
+  const [pkg, bk, msgs, vis, park, fac] = await Promise.all([packageStats(ctx), bookingStats(ctx), principal.permissions.has("message.manage") ? messageBadgeCount(ctx) : Promise.resolve(null),
+    visitorStats(ctx), parkingStats(ctx), facilityStats(ctx)]);
 
   return (
     <>
@@ -90,7 +98,7 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
         </section>
       ) : null}
 
-      {pkg || bk || msgs !== null ? (
+      {pkg || bk || msgs !== null || vis || park ? (
         <section aria-labelledby="community-h" className="mb-6">
           <h2 id="community-h" className="mb-2 text-[13px] font-medium text-muted">Front desk & community</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -98,6 +106,20 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
             {pkg && pkg.perishable ? <StatLink href={`${base}/packages`} label="Perishable waiting" value={<span className="text-danger">{pkg.perishable}</span>} /> : null}
             {bk ? <StatLink href={`${base}/amenities/bookings?view=pending`} label="Bookings to approve" value={<span className={bk.pending ? "text-warning" : undefined}>{bk.pending}</span>} sub={`${bk.today} booked today`} /> : null}
             {msgs !== null ? <StatLink href={`${base}/messages`} label="Messages needing a reply" value={<span className={msgs ? "text-warning" : undefined}>{msgs}</span>} /> : null}
+            {vis ? <StatLink href={`${base}/visitors`} label="Visitors expected today" value={vis.expectedToday} sub={`${vis.onSite} on site now`} /> : null}
+            {park ? <StatLink href={`${base}/parking`} label="Parking reports to review" value={<span className={park.review ? "text-warning" : undefined}>{park.review}</span>} sub={`${park.visitorFree}/${park.visitor} visitor spaces free`} /> : null}
+          </div>
+        </section>
+      ) : null}
+
+      {fac ? (
+        <section aria-labelledby="facility-h" className="mb-6">
+          <h2 id="facility-h" className="mb-2 text-[13px] font-medium text-muted">Facility</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatLink href={`${base}/assets?status=down`} label="Equipment out of service" value={<span className={fac.down ? "text-danger" : undefined}>{fac.down}</span>} sub={fac.criticalDown ? `${fac.criticalDown} high/critical` : `${fac.total} assets in service`} />
+            <StatLink href={`${base}/calendar?view=agenda&src=pm`} label="PM due in 14 days" value={fac.pmDueSoon} sub={`${fac.pmActive} active schedules`} />
+            <StatLink href={`${base}/maintenance?view=overdue`} label="PM work orders open" value={fac.pmOpen} sub={fac.pmOverdue ? <span className="text-warning">{fac.pmOverdue} overdue</span> : `${fac.pmDone30} done in 30 days`} />
+            <StatLink href={`${base}/assets`} label="Downtime (30 days)" value={hours(fac.downtimeHours30d)} sub={fac.repeat.length ? `${fac.repeat.length} asset${fac.repeat.length === 1 ? "" : "s"} with repeat failures` : undefined} />
           </div>
         </section>
       ) : null}

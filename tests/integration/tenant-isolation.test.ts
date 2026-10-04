@@ -6,7 +6,9 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   "inspections", "inspection_items", "incidents", "complaints", "files", "notifications", "notification_preferences", "outbox_events",
   // iteration 4: community
   "amenities", "amenity_blackouts", "bookings", "packages", "announcements", "announcement_reads", "message_threads", "messages", "message_reads",
-  "message_templates", "documents", "document_versions"];
+  "message_templates", "documents", "document_versions",
+  // iteration 5: front desk & facility
+  "visitors", "parking_spaces", "vehicles", "parking_permits", "parking_violations", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
 
 let A: string; // Pacific Properties
@@ -53,7 +55,8 @@ describe("reads", () => {
     const { rows } = await ownerPool.query(`select count(distinct org_id)::int n from ${table} where org_id = any($1)`, [[A, B]]);
     expect(rows[0].n).toBe(2);
   });
-  it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents"])("%s: no context sees nothing", async (table) => {
+  it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents",
+    "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime"])("%s: no context sees nothing", async (table) => {
     await asApp({}, async (q) => {
       const { rows } = await q(`select count(*)::int as n from ${table}`);
       expect(rows[0].n).toBe(0);

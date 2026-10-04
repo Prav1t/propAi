@@ -13,20 +13,24 @@ import { messageBadgeCount } from "@/server/modules/messaging/service";
 import { unreadAnnouncementCount } from "@/server/modules/announcements/service";
 import { listPackages, canUsePackages } from "@/server/modules/packages/service";
 import { bookingStats } from "@/server/modules/amenities/service";
+import { visitorStats } from "@/server/modules/visitors/service";
+import { parkingStats } from "@/server/modules/parking/service";
 
 export default async function OrgLayout({ children, params }: LayoutProps<"/o/[orgSlug]">) {
   const { orgSlug } = await params;
   const { session, principal, ctx } = await getOrgContext(orgSlug);
   const resident = principal.role.category === "resident";
   // live counts for nav badges (each query is permission-scoped and cheap)
-  const [unread, messages, announcements, packages, bookings] = await Promise.all([
+  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview] = await Promise.all([
     unreadCount(ctx),
     messageBadgeCount(ctx),
     resident ? unreadAnnouncementCount(ctx) : Promise.resolve(0),
     resident && canUsePackages(principal) ? listPackages(ctx, { view: "waiting", pageSize: 1 }).then((r) => r.total) : Promise.resolve(0),
     !resident ? bookingStats(ctx).then((r) => r?.pending ?? 0) : Promise.resolve(0),
+    !resident ? visitorStats(ctx).then((r) => r?.expectedToday ?? 0) : Promise.resolve(0),
+    !resident ? parkingStats(ctx).then((r) => r?.review ?? 0) : Promise.resolve(0),
   ]);
-  const badges: Record<string, number> = { messages, announcements, packages, bookings };
+  const badges: Record<string, number> = { messages, announcements, packages, bookings, visitors: visitorsOnSite, parking: parkingReview };
   const sections = visibleNav(principal.permissions, principal.role.category).map((s) => ({
     title: s.title,
     items: s.items.map((i) => ({ label: i.label, icon: i.icon, href: i.href(orgSlug), badge: i.badgeKey ? badges[i.badgeKey] : undefined })),
@@ -47,6 +51,14 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     ...(principal.permissions.has("message.manage") ? [{ label: "Message a resident", href: `${base}/messages/new`, group: "Action", keywords: "contact write" }] : []),
     ...(resident && principal.permissions.has("message.use") ? [{ label: "Message management", href: `${base}/messages/new`, group: "Action", keywords: "contact write question" }] : []),
     ...(principal.permissions.has("document.manage") ? [{ label: "Upload document", href: `${base}/documents/new`, group: "Action", keywords: "bylaws rules file" }] : []),
+    ...(principal.permissions.has("visitor.manage") ? [{ label: "Register a visitor", href: `${base}/visitors/new`, group: "Action", keywords: "guest contractor walk in check in" }, { label: "Open the front desk", href: `${base}/desk`, group: "Action", keywords: "concierge scan pass console" }] : []),
+    ...(resident && principal.permissions.has("visitor.invite") ? [{ label: "Invite a guest", href: `${base}/visitors/new`, group: "Action", keywords: "visitor pass qr friend family" }] : []),
+    ...(principal.permissions.has("parking.manage") ? [{ label: "Report a parking violation", href: `${base}/parking/violations/new`, group: "Action", keywords: "plate tow car vehicle" }, { label: "Look up a licence plate", href: `${base}/parking`, group: "Action", keywords: "plate car vehicle permit" }] : []),
+    ...(resident && principal.permissions.has("parking.use") ? [{ label: "Register my vehicle", href: `${base}/parking`, group: "Action", keywords: "car plate parking" }] : []),
+    ...(principal.permissions.has("shift.read") ? [{ label: "Write a shift handoff", href: `${base}/shifts/handoff`, group: "Action", keywords: "shift notes next" }] : []),
+    ...(principal.permissions.has("shift.manage") ? [{ label: "Schedule a shift", href: `${base}/shifts`, group: "Action", keywords: "staff roster on call" }] : []),
+    ...(principal.permissions.has("asset.manage") ? [{ label: "Add asset", href: `${base}/assets/new`, group: "Action", keywords: "equipment hvac elevator" }] : []),
+    ...(principal.permissions.has("asset.read") ? [{ label: "Equipment out of service", href: `${base}/assets?status=down`, group: "Action", keywords: "down broken downtime" }] : []),
     { label: "Notifications", href: `${base}/notifications`, group: "Navigate", keywords: "inbox alerts email" },
     ...(principal.role.scopeLevel === "org" && can(principal, "property.manage") ? [{ label: "Create property", href: `${base}/properties/new`, group: "Action", keywords: "new add building" }] : []),
     ...(principal.permissions.has("resident.manage") ? [{ label: "Add resident", href: `${base}/residents/new`, group: "Action", keywords: "new tenant owner move in" }] : []),

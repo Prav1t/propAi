@@ -1,6 +1,6 @@
 # Architecture
 
-_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 4). Sections marked **(planned)** are not implemented yet._
+_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 5). Sections marked **(planned)** are not implemented yet._
 
 ## 1. Decisions at a glance
 
@@ -116,6 +116,17 @@ Incidents, complaints, tasks and inspections follow the same pattern (scoped sta
 
 The access rules are one function per record (`canReadDocument`, `documentVisibleWhere`, …) used by the list query, the detail page and every mutation, as in Iteration 3.
 
+### Front desk & facility records (Iteration 5)
+
+| Record | Staff | Residents |
+|---|---|---|
+| Visitors | `visitor.manage` on the building: register, walk-in, scan, check in/out, turn away, see the log | `visitor.invite`: invite guests to their own unit, see/cancel those visits, reissue the pass link |
+| Parking | `parking.manage`: spaces, permits, vehicles, plate lookup, violation reports, review, notices | `parking.use`: their unit's spaces, permits, vehicles (register/remove, max 4) and notices actually issued to them — never reports, evidence or who reported |
+| Shifts | `shift.manage` schedules staff whose role scope covers the property; `shift.read` sees the team schedule (building-scoped staff also see property-wide shifts), clocks in/out of their own shifts, writes and acknowledges handoffs | — |
+| Assets | `asset.manage` registers assets, schedules PM, changes status; `asset.read` (e.g. maintenance staff) reads within scope | none; the equipment link is hidden on residents' requests |
+
+New permissions: `visitor.invite`, `parking.use`, `shift.read` (59 total).
+
 ## 7. Security baseline
 
 Implemented in Iteration 1 unless marked planned:
@@ -143,7 +154,7 @@ service (one transaction)                 worker (system context)
                                                  mark processed; commit; then send emails
 ```
 
-- **Transactional outbox:** `emit()` writes an `outbox_events` row in the same transaction as the change, so an event exists if and only if the change committed (`emitSystem()` does the same from worker jobs). Event types so far: `workorder.created|assigned|status_changed|commented|sla_breached`, `task.assigned`, `incident.created|escalated`, `complaint.created|status_changed|commented`, `inspection.failed`, and from Iteration 4 `booking.created|decided|cancelled`, `package.arrived|reminder|released`, `announcement.published`, `message.posted` (community deliveries live in `notifications/community.ts`).
+- **Transactional outbox:** `emit()` writes an `outbox_events` row in the same transaction as the change, so an event exists if and only if the change committed (`emitSystem()` does the same from worker jobs). Event types so far: `workorder.created|assigned|status_changed|commented|sla_breached`, `task.assigned`, `incident.created|escalated`, `complaint.created|status_changed|commented`, `inspection.failed`, and from Iteration 4 `booking.created|decided|cancelled`, `package.arrived|reminder|released`, `announcement.published`, `message.posted` (community deliveries live in `notifications/community.ts`), and from Iteration 5 `visitor.checked_in|denied`, `parking.violation_reported|notice_issued`, `shift.handoff_created`, `asset.down` (`notifications/facility.ts`).
 - **Delivery** (`src/server/modules/notifications/service.ts`): recipients are resolved from live data (managers whose role and scope cover the property; the assignee; the vendor's users; the requester), the actor is excluded, and a comment's visibility limits who hears about it. Notifications are unique per `(event_id, user_id)`, so re-processing is harmless; emails go out only after commit. Per-user, per-kind preferences control in-app and email.
 - **Triggers:** right after a form action (`after()` in `runOrgForm`), on an in-process 30-second loop started from `src/instrumentation.ts`, or a separate `npm run worker` process (set `DISABLE_INPROCESS_WORKER=true` on app instances when you run it).
 - **System context:** the worker sets `app.system = 'on'`, which lets RLS read across orgs to find pending work. Writes still require naming the org (`WITH CHECK (org_id = app_org())`), and a request context can only notify its own user.
@@ -151,6 +162,7 @@ service (one transaction)                 worker (system context)
   - **SLA monitor:** flags open work orders past `resolve_due_at` once (`sla_breached_at`), adds an internal timeline entry, and emits `workorder.sla_breached`.
   - **Scheduled announcements:** publishes those whose `publish_at` has passed and emits `announcement.published` (notifies the audience if the author asked to).
   - **Package reminders:** one reminder per package waiting `PACKAGE_REMINDER_DAYS` (default 3; perishables after 1 day).
+  - **Preventive maintenance:** opens a work order for each schedule whose lead window has started (in the property's time zone), assigns the schedule's vendor/staff if still valid, and moves `next_due_on` on. Missed occurrences are skipped (one work order for the latest, never a backlog); the schedule row is locked with `FOR UPDATE SKIP LOCKED`, so concurrent workers can't double-generate.
   - `npm run worker -- --once` runs a single tick for cron-style schedulers.
 - **Next:** the workflow engine (Iteration 9), webhooks (10) and AI insights subscribe to the same outbox.
 
@@ -171,6 +183,17 @@ service (one transaction)                 worker (system context)
 - **Announcements:** property + building list + audience targeting resolved to users at publish time (`audienceUserIds`), schedule/expiry, read receipts, `{{property}}`/`{{org_name}}`/`{{today}}` placeholders.
 - **Messaging:** one thread per resident conversation, unread tracking per user, assignment, internal notes, and reply templates rendered per thread with `{{resident_name}}`, `{{unit}}`, … (`src/lib/template.ts`); unknown variables are rejected when a template is saved and flagged if data is missing when it's inserted.
 - **Resident app:** a mobile-first home (package banner with pickup codes, unread replies, quick actions, announcements, requests, bookings, important documents, emergency contacts), a bottom tab bar on phones, nav badges, and a web app manifest (installable to the home screen; push notifications are not implemented yet).
+
+## 9b. Front desk & facility modules (Iteration 5)
+
+- **Guest passes:** a pass is a 192-bit random token; only its SHA-256 is stored. The QR code encodes `APP_URL/pass/{token}`; the guest needs no account. The public page reads the single matching row through the `visitor_pass` RLS policy and shows only the guest's first name and initial, the building and the window — never the host or unit. It's rate-limited per IP, `noindex`, `no-referrer`. The link is shown to the inviter once (pass card with copy/share); "Get a new pass link" replaces it, and check-out, cancellation or denial clears it. The desk scans with the device camera (`BarcodeDetector`) or a handheld scanner typing into the box, or searches by name/unit. Check-in outside the window (an hour early to the end) requires an override with a reason, kept in the audit log.
+- **Visitor parking:** at check-in the desk can pick a free visitor space; a visitor permit is issued for the visit and ended at check-out. The exclusion constraint makes double assignment impossible even with two desks.
+- **Parking enforcement is human-reviewed:** staff reports and camera detections (`ingestDetection`, the entry point for a future licence-plate-recognition integration) land as `reported`. Nothing reaches a resident until a person **confirms** it; then a notice can be issued, which notifies the residents of the matched unit. Detections are labelled with their confidence everywhere. Organizations can require a second staff member to review a report (`parkingSecondReviewer`). The plate lookup returns facts for a person to act on, not a verdict.
+- **Shifts and on-call routing:** shifts can be repeated weekly, and `on_call` marks after-hours coverage. When a maintenance request is an emergency and triage didn't assign anyone, it is assigned to the person on call at that property right now (a role that can work requests), with a timeline note. With nobody on call it stays with the managers (who are always notified of emergencies).
+- **Handoffs:** writing a handoff stores the notes plus a snapshot of open items at that moment (emergencies, incidents, visitors on site, packages, messages needing a reply, bookings, parking reports, tasks) built only from what the author can see; people on shift now or starting within three hours are notified, and someone other than the author acknowledges it.
+- **Assets, PM and downtime:** a work order can name the equipment and mark it out of service, which opens a downtime record and sets the asset `down`. Completing, closing or cancelling that work order closes the downtime and returns the asset to service. The asset page shows recorded facts only: reactive requests in 90 days, downtime hours, cost over 12 months, PM history.
+- **Unified calendar** (`calendar/service.ts`): merges scheduled work orders, inspections, PM due dates, bookings, visitors, shifts and task due dates into day/week/month/agenda views. Each source applies its own list visibility rule (the same predicates as the module pages), so residents see only their own bookings, guests and scheduled visits.
+- **Front desk console** (`/desk`, and the dashboard for concierge and security roles): pass scanner, expected and on-site visitors, packages, messages needing a reply, bookings, open incidents, the current shift with clock in/out and the last handoff, parking status with plate lookup.
 
 ## 10. Integrations (planned, Iteration 10)
 

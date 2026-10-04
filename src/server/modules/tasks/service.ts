@@ -13,7 +13,7 @@ export const RECURRENCES = ["none", "daily", "weekly", "monthly"] as const;
 type TaskRow = typeof tasks.$inferSelect;
 
 // who can see a task: scoped readers, the assignee, and the creator
-function visibleWhere(p: Principal): SQL {
+export function taskVisibleWhere(p: Principal): SQL {
   const parts: (SQL | undefined)[] = [eq(tasks.assignedMembershipId, p.membershipId), eq(tasks.createdByUserId, p.userId)];
   if (p.permissions.has("task.read") || p.permissions.has("task.manage")) {
     parts.push(p.role.scopeLevel === "org" ? sql`true` : and(sql`${tasks.propertyId} is not null`, scopeCondition(p, { property: tasks.propertyId, building: tasks.buildingId }) ?? sql`true`));
@@ -45,7 +45,7 @@ export async function listTasks(ctx: TenantCtx, opts: { view?: "open" | "mine" |
   const open = inArray(tasks.status, ["open", "in_progress", "blocked"]);
   const viewCond = { open, mine: and(open, eq(tasks.assignedMembershipId, p.membershipId)), overdue: and(open, lt(tasks.dueAt, now)), done: eq(tasks.status, "done"), all: undefined }[opts.view ?? "open"];
   return tenantTx(ctx, async (tx) => {
-    const where = and(eq(tasks.orgId, p.orgId), visibleWhere(p), viewCond, opts.propertyId ? eq(tasks.propertyId, opts.propertyId) : undefined);
+    const where = and(eq(tasks.orgId, p.orgId), taskVisibleWhere(p), viewCond, opts.propertyId ? eq(tasks.propertyId, opts.propertyId) : undefined);
     const [{ n }] = await tx.select({ n: count() }).from(tasks).where(where);
     const rows = await tx
       .select({

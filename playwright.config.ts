@@ -4,6 +4,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 60_000,
+  // the dev server compiles a route on first visit, which can take a few seconds
+  expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,

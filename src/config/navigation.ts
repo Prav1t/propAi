@@ -19,11 +19,16 @@ export const NAV: NavSection[] = [
       { label: "Inspections", href: (s) => `/o/${s}/inspections`, anyOf: ["inspection.read", "inspection.manage"], icon: "clipboard" },
       { label: "Incidents", href: (s) => `/o/${s}/incidents`, anyOf: ["incident.read", "incident.create"], icon: "alert" },
       { label: "Complaints", href: (s) => `/o/${s}/complaints`, anyOf: ["complaint.read", "complaint.create", "complaint.manage"], icon: "flag" },
+      { label: "Assets", href: (s) => `/o/${s}/assets`, anyOf: ["asset.read", "asset.manage"], icon: "gear" },
+      { label: "Calendar", href: (s) => `/o/${s}/calendar`, anyOf: ["workorder.read", "workorder.read.assigned", "inspection.read", "booking.manage", "visitor.manage", "shift.read", "asset.read", "task.read"], icon: "clock" },
     ],
   },
   {
     title: "Community",
     items: [
+      { label: "Front desk", href: (s) => `/o/${s}/desk`, anyOf: ["visitor.manage", "package.manage"], icon: "desk" },
+      { label: "Visitors", residentLabel: "My guests", href: (s) => `/o/${s}/visitors`, anyOf: ["visitor.manage", "visitor.invite"], icon: "badge", badgeKey: "visitors" },
+      { label: "Parking", residentLabel: "My parking", href: (s) => `/o/${s}/parking`, anyOf: ["parking.manage", "parking.use"], icon: "car", badgeKey: "parking" },
       { label: "Amenities", residentLabel: "Book amenities", href: (s) => `/o/${s}/amenities`, anyOf: ["amenity.read", "amenity.manage", "booking.manage"], icon: "calendar", badgeKey: "bookings" },
       { label: "Packages", residentLabel: "My packages", href: (s) => `/o/${s}/packages`, anyOf: ["package.manage", "package.read.own"], icon: "box", badgeKey: "packages" },
       { label: "Announcements", href: (s) => `/o/${s}/announcements`, anyOf: ["announcement.read", "announcement.manage"], icon: "megaphone", badgeKey: "announcements" },
@@ -44,6 +49,7 @@ export const NAV: NavSection[] = [
     items: [
       { label: "Residents", href: (s) => `/o/${s}/residents`, anyOf: ["resident.read"], icon: "user" },
       { label: "Staff", href: (s) => `/o/${s}/staff`, anyOf: ["member.read"], icon: "users" },
+      { label: "Shifts", href: (s) => `/o/${s}/shifts`, anyOf: ["shift.read", "shift.manage"], icon: "clock" },
       { label: "Vendors", href: (s) => `/o/${s}/vendors`, anyOf: ["vendor.read"], icon: "truck" },
     ],
   },

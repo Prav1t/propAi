@@ -71,6 +71,20 @@
       "when": 1791089130566,
       "tag": "0009_rls_community",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791108614044,
+      "tag": "0010_facility_frontdesk",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791108615044,
+      "tag": "0011_rls_facility",
+      "breakpoints": true
     }
   ]
 }

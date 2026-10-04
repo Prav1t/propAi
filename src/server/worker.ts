@@ -1,6 +1,7 @@
 import { checkSlaBreaches, drainOutbox } from "./modules/notifications/service";
 import { publishDueAnnouncements } from "./modules/announcements/service";
 import { packageReminders } from "./modules/packages/service";
+import { generatePreventiveMaintenance } from "./modules/assets/service";
 import { log } from "./log";
 
 const g = globalThis as unknown as { __workerTimer?: ReturnType<typeof setInterval> };
@@ -11,8 +12,9 @@ export async function workerTick() {
     const breached = await checkSlaBreaches();
     const published = await publishDueAnnouncements();
     const reminded = await packageReminders();
+    const pm = await generatePreventiveMaintenance();
     const delivered = await drainOutbox();
-    if (breached || published || reminded || delivered) log.info("worker.tick", { breached, published, reminded, delivered });
+    if (breached || published || reminded || pm || delivered) log.info("worker.tick", { breached, published, reminded, pm, delivered });
   } catch (err) {
     log.error("worker.tick_failed", { err });
   }

@@ -65,16 +65,22 @@ export async function createOrganization(userId: string, input: z.infer<typeof c
 export const orgSettingsSchema = z.object({
   name: z.string().trim().min(2).max(120),
   timezone: z.enum(TIMEZONES),
+  parkingSecondReviewer: z.boolean().default(false),
 });
+
+// typed view of organizations.settings (jsonb)
+export type OrgSettings = { parkingSecondReviewer?: boolean };
+export const orgSettings = (raw: unknown): OrgSettings => (raw && typeof raw === "object" ? (raw as OrgSettings) : {});
 
 export async function updateOrganizationSettings(ctx: TenantCtx, input: z.infer<typeof orgSettingsSchema>) {
   authorize(ctx.principal, "org.settings.manage");
   return tenantTx(ctx, async (tx) => {
     const [before] = await tx.select().from(organizations).where(eq(organizations.id, ctx.principal.orgId));
-    const [after] = await tx.update(organizations).set({ name: input.name, timezone: input.timezone }).where(eq(organizations.id, ctx.principal.orgId)).returning();
+    const settings = { ...orgSettings(before.settings), parkingSecondReviewer: input.parkingSecondReviewer };
+    const [after] = await tx.update(organizations).set({ name: input.name, timezone: input.timezone, settings }).where(eq(organizations.id, ctx.principal.orgId)).returning();
     await writeAudit(tx, {
       orgId: ctx.principal.orgId, actorUserId: ctx.principal.userId, action: "org.settings.updated", entityType: "organization",
-      entityId: ctx.principal.orgId, before: { name: before.name, timezone: before.timezone }, after: { name: after.name, timezone: after.timezone },
+      entityId: ctx.principal.orgId, before: { name: before.name, timezone: before.timezone, settings: before.settings }, after: { name: after.name, timezone: after.timezone, settings },
     }, ctx.meta);
     return after;
   });

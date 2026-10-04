@@ -6,6 +6,7 @@ import { unitResidentUsers } from "../community/residents";
 import { audienceUserIds } from "../announcements/service";
 import { membershipUser, usersWithPermAt } from "./recipients";
 import type { Delivery } from "./service";
+import { facilityDeliveries } from "./facility";
 
 type Event = typeof outboxEvents.$inferSelect;
 
@@ -92,6 +93,6 @@ export async function communityDeliveries(tx: Tx, e: Event, base: string): Promi
       return [{ userIds: to, kind: "message.inbox", title: `Message from ${r ? `${r.first} ${r.last}` : "a resident"}${u ? ` (Unit ${u.number})` : ""}: ${t.subject}`, body: t.lastMessagePreview, href, entityType: "message_thread", entityId: t.id }];
     }
     default:
-      return [];
+      return facilityDeliveries(tx, e, base);
   }
 }

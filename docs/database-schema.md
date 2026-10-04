@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–4)
+## Implemented (Iterations 1–5)
 
 ### Identity & auth (🌐)
 
@@ -100,9 +100,37 @@ EXCLUDE USING gist (amenity_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH 
 
 The service also locks the amenity row (`SELECT … FOR UPDATE`) before evaluating capacity for shared amenities, and maps the constraint error (`23P01`) to "someone has just booked that time".
 
+### Front desk & facility (🔒, Iteration 5)
+
+| Table | Purpose / key columns |
+|---|---|
+| `visitors` | property/building, unit (null for common-area contractors), host resident, `invited_by_user_id`, name, company, phone, `kind` guest/delivery/contractor/service/other, purpose, `expected_from`/`expected_until` (pass window, `until > from`), `status` expected/checked_in/checked_out/cancelled/denied, **`pass_token_hash`** (SHA-256 of the QR token; unique; cleared when the visit ends, is cancelled or the pass is reissued), plate, `needs_parking`, linked `work_order_id`, checked in/out at/by, denied reason |
+| `parking_spaces` | property (optional building), `code` (upper-case, unique per property), level, `kind` resident/visitor/accessible/ev/loading/motorcycle/reserved, `assigned_unit_id`, `status` available/out_of_service |
+| `vehicles` | property, unit, resident, `plate` (normalised letters+digits), region, make/model/colour, `active`; **one active record per plate per org** (partial unique index) |
+| `parking_permits` | per-org `number`, `kind` resident/visitor/contractor/staff, plate, vehicle, unit, space, visitor, `valid_from`, `valid_until` (null = open-ended), `status` active/revoked, issued/revoked by |
+| `parking_violations` | per-org `number`, property/building/space, plate, location, `kind`, description, `observed_at`, **`source` staff/resident/detection** with `confidence` for detections, `status` reported → confirmed/dismissed → warned → resolved, matched `vehicle_id`/`unit_id` and `had_valid_permit` (facts at report time), reviewer + note, warning text/time, resolution |
+| `shifts` | property (optional building), membership, `position`, `starts_at`/`ends_at`, `on_call`, notes, `status` scheduled/cancelled, `clocked_in_at`/`clocked_out_at` |
+| `shift_handoffs` | property/building, shift, author, notes, **`snapshot` jsonb** (open items at the time, limited to what the author could see), acknowledged by/at |
+| `assets` | property/building/unit, location, name, `tag` (unique per org), `category`, make/model/serial, installed, warranty, expected life, `criticality`, `status` operational/needs_attention/down/retired, service vendor, replacement cost |
+| `pm_schedules` | asset, property, title, instructions, `interval_unit` day/week/month/year × `interval_count`, `next_due_on`, `lead_days`, priority, vendor or staff assignee, `active`, last generated work order |
+| `asset_downtime` | asset, `started_at`/`ended_at` (null = ongoing; **one open record per asset**), reason, linked work order |
+
+Also added: `work_orders.asset_id` (equipment involved; PM work orders have `source = 'system'`, `source_type = 'pm_schedule'`), per-org counters `parking_permit` and `parking_violation`, and `organizations.settings.parkingSecondReviewer`.
+
+**Constraints that hold under concurrency** (migration `0011`, `btree_gist`):
+
+```sql
+-- a space has one live permit at a time
+EXCLUDE USING gist (space_id WITH =, tstzrange(valid_from, valid_until, '[)') WITH &&) WHERE (status = 'active' AND space_id IS NOT NULL)
+-- nobody is scheduled for two overlapping shifts
+EXCLUDE USING gist (membership_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&) WHERE (status = 'scheduled')
+```
+
+Visitor check-in issues the parking permit in a savepoint, so "space just taken" (`23P01`) leaves the visitor untouched and shows a friendly error.
+
 ### Full-text search
 
-Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades) and `documents` (title, description). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
+Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades), `documents` (title, description) and `assets` (name, tag, make, model, serial, location, category). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
 
 ### Indexes
 
@@ -117,6 +145,7 @@ app_org()            -- current_setting('app.org_id')
 app_user()           -- current_setting('app.user_id')
 app_platform_admin() -- current_setting('app.platform_admin') = 'on'
 app_system()         -- current_setting('app.system') = 'on'   (background worker only, Iteration 3)
+current_setting('app.pass_token_hash')                      (public guest-pass page only, Iteration 5)
 ```
 
 | Policy | Rule |
@@ -130,6 +159,7 @@ app_system()         -- current_setting('app.system') = 'on'   (background worke
 | `notifications` | read/update: own rows in the current org (worker: any user in the org it names); insert: own user, or the worker |
 | `notification_preferences` | own rows only |
 | `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
+| Front desk & facility tables (`visitors`, `parking_*`, `vehicles`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` — 10 tables, migration `0011`) | same rule as the community tables. **Plus** `visitor_pass`: with no org context, a transaction that sets `app.pass_token_hash` may SELECT exactly the visitor row with that hash (the public pass page); it then switches to that org to read the building's public details |
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
 
 Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 testing: inside org A, a user could see their own membership in org B. Covered by a regression test in `tests/integration/tenant-isolation.test.ts`.
@@ -138,8 +168,8 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 5 | `parking_spaces`, `storage_lockers`, `visitors`, `visitor_passes`, `vehicles`, `parking_permits`, `parking_violations`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` |
 | 6–7 | `ai_conversations`, `ai_messages`, `ai_action_logs`, `ai_approvals`, `ai_policies`, `ai_usage` |
 | 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |
 | 9 | `workflows`, `workflow_runs`, `reports`, `scheduled_jobs` |
 | 10 | `plans`, `subscriptions`, `invoices`, `usage_records`, `api_keys`, `webhooks`, `webhook_deliveries`, `integrations`, `feature_flags` |
+| later | `storage_lockers` (not built in Iteration 5) |

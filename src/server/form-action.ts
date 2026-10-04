@@ -20,7 +20,7 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   fd: FormData;
   schema: S;
   run: (ctx: TenantCtx, data: z.output<S>) => Promise<R>;
-  done: (result: R) => { redirectTo?: string; revalidate?: string[]; message?: string };
+  done: (result: R) => { redirectTo?: string; revalidate?: string[]; message?: string; data?: unknown };
 }): Promise<ActionState> {
   const values = echo(opts.fd);
   const parsed = opts.schema.safeParse(Object.fromEntries(Object.entries(values)));
@@ -40,5 +40,5 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   const d = opts.done(result);
   for (const p of d.revalidate ?? [`/o/${opts.orgSlug}`]) revalidatePath(p, "layout");
   if (d.redirectTo) redirect(d.redirectTo);
-  return { ok: true, message: d.message ?? "Saved." };
+  return { ok: true, message: d.message ?? "Saved.", ...(d.data !== undefined ? { data: d.data } : {}) };
 }

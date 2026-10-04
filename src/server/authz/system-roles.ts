@@ -23,7 +23,8 @@ const OPS_READ: Permission[] = [
 
 const RESIDENT_BASE: Permission[] = [
   "org.read", "unit.read.own", "workorder.read.own", "workorder.create", "incident.create", "complaint.create",
-  "amenity.read", "booking.create", "package.read.own", "announcement.read", "message.use", "document.read", "ai.use",
+  "amenity.read", "booking.create", "package.read.own", "announcement.read", "message.use", "document.read",
+  "visitor.invite", "parking.use", "ai.use",
 ];
 
 // system roles are seeded on every migrate; keys are stable identifiers
@@ -48,40 +49,41 @@ export const SYSTEM_ROLES: SystemRole[] = [
     description: "Runs day-to-day operations of assigned buildings.",
     permissions: [...OPS_READ, "workorder.manage", "workorder.create", "task.manage", "inspection.manage",
       "incident.create", "incident.manage", "complaint.manage", "booking.manage", "package.manage", "visitor.manage",
-      "parking.manage", "announcement.manage", "shift.manage", "resident.manage", "analytics.read",
+      "parking.manage", "announcement.manage", "shift.read", "shift.manage", "resident.manage", "analytics.read",
       "amenity.manage", "document.manage", "message.manage"],
   },
   {
     key: "facility_manager", name: "Facility Manager", category: "staff", scopeLevel: "scoped",
     description: "Assets, preventive maintenance, inspections and vendors.",
     permissions: [...OPS_READ, "workorder.manage", "workorder.configure", "workorder.create", "vendor.manage", "task.manage",
-      "inspection.manage", "incident.create", "incident.manage", "asset.manage", "finance.read", "analytics.read"],
+      "inspection.manage", "incident.create", "incident.manage", "asset.manage", "finance.read", "analytics.read",
+      "shift.read", "shift.manage"],
   },
   {
     key: "staff", name: "Staff", category: "staff", scopeLevel: "scoped",
     description: "General building staff.",
     permissions: ["org.read", "property.read", "unit.read", "task.read", "incident.read", "incident.create",
-      "announcement.read", "document.read", "message.use", "ai.use"],
+      "announcement.read", "document.read", "shift.read", "message.use", "ai.use"],
   },
   {
     key: "maintenance_staff", name: "Maintenance Staff", category: "staff", scopeLevel: "scoped",
     description: "Works on assigned work orders and tasks.",
     permissions: ["org.read", "property.read", "unit.read", "workorder.read.assigned", "workorder.create",
       "task.read", "inspection.read", "incident.create", "asset.read", "announcement.read", "document.read",
-      "message.use", "ai.use"],
+      "shift.read", "message.use", "ai.use"],
   },
   {
     key: "concierge", name: "Concierge", category: "staff", scopeLevel: "scoped",
     description: "Front desk: packages, visitors, resident questions, shift logs.",
     permissions: ["org.read", "property.read", "unit.read", "resident.read", "workorder.create", "task.read",
       "incident.read", "incident.create", "complaint.create", "amenity.read", "booking.manage", "package.manage",
-      "visitor.manage", "parking.manage", "announcement.read", "document.read", "shift.manage", "message.use", "message.manage", "ai.use"],
+      "visitor.manage", "parking.manage", "announcement.read", "document.read", "shift.read", "message.use", "message.manage", "ai.use"],
   },
   {
     key: "security", name: "Security", category: "staff", scopeLevel: "scoped",
     description: "Incidents, visitors, parking enforcement, patrol logs.",
     permissions: ["org.read", "property.read", "unit.read", "resident.read", "incident.read", "incident.create",
-      "incident.manage", "visitor.manage", "parking.manage", "announcement.read", "document.read", "shift.manage",
+      "incident.manage", "visitor.manage", "parking.manage", "announcement.read", "document.read", "shift.read",
       "message.use", "ai.use"],
   },
   {

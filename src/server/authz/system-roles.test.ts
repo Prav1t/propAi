@@ -31,6 +31,18 @@ describe("system roles", () => {
       expect(r.permissions.filter((p) => p.endsWith(".manage") || p.endsWith(".configure")), r.key).toEqual([]);
     }
   });
+  it("front desk staff see the schedule and write handoffs; managers schedule", () => {
+    const role = (k: string) => SYSTEM_ROLES.find((r) => r.key === k)!.permissions;
+    for (const k of ["concierge", "security", "staff", "maintenance_staff"]) {
+      expect(role(k), k).toContain("shift.read");
+      expect(role(k), k).not.toContain("shift.manage");
+    }
+    for (const k of ["building_manager", "facility_manager", "property_manager"]) expect(role(k), k).toContain("shift.manage");
+    for (const k of ["resident", "tenant", "owner", "occupant"]) {
+      expect(role(k), k).toEqual(expect.arrayContaining(["visitor.invite", "parking.use"]));
+      expect(role(k), k).not.toContain("visitor.manage");
+    }
+  });
   it("keeps vendors minimal", () => {
     const v = SYSTEM_ROLES.find((r) => r.key === "vendor")!;
     expect(v.scopeLevel).toBe("assigned");

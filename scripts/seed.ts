@@ -1,9 +1,10 @@
-import { eq, inArray, isNull } from "drizzle-orm";
+import { eq, inArray, isNull, like } from "drizzle-orm";
 import { ownerDb } from "./lib";
 import * as s from "../src/server/db/schema";
 import { hashPassword } from "../src/server/auth/password";
 import { seedOps } from "./seed-ops";
 import { seedCommunity, seedFile } from "./seed-community";
+import { EXTRA_STAFF_DOMAIN, seedFacility, seedFacilityTenant } from "./seed-facility";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -48,6 +49,7 @@ async function main() {
     // wipe previous demo data
     await tx.delete(s.organizations).where(inArray(s.organizations.slug, ["pacific-properties", "northshore-strata"]));
     await tx.delete(s.users).where(inArray(s.users.email, demoEmails));
+    await tx.delete(s.users).where(like(s.users.email, `%@${EXTRA_STAFF_DOMAIN}`));
 
     const passwordHash = await hashPassword(DEMO_PASSWORD);
     const verified = new Date("2026-01-15T17:00:00Z");
@@ -259,11 +261,14 @@ async function main() {
     const [nsDoc] = await tx.insert(s.documents).values({ orgId: ns.id, propertyId: nsProp.id, title: "Lonsdale bylaws", category: "bylaws", audience: "owners", currentVersion: 1 }).returning();
     const nsFile = await seedFile(tx, ns.id, "document", nsDoc.id, "bylaws.txt", new TextEncoder().encode("Lonsdale Quay Lofts bylaws\n"), "text/plain");
     await tx.insert(s.documentVersions).values({ orgId: ns.id, documentId: nsDoc.id, version: 1, fileId: nsFile.id });
+    await seedFacilityTenant(tx, { orgId: ns.id, propertyId: nsProp.id, buildingId: nsBld.id, unitId: nsUnit.id, membershipId: nsAdmin.id, userId: nsUser });
 
     const ops = await seedOps(tx, pac.id);
     console.log(`✓ operations: ${ops.workOrders} work orders, ${ops.tasks} tasks, ${ops.inspections} inspections, ${ops.incidents} incidents, ${ops.complaints} complaints`);
     const com = await seedCommunity(tx, pac.id);
     console.log(`✓ community: ${com.amenities} amenities, ${com.bookings} bookings, ${com.packages} packages, ${com.announcements} announcements, ${com.documents} documents`);
+    const fac = await seedFacility(tx, pac.id);
+    console.log(`✓ front desk & facility: ${fac.visitors} visitors, ${fac.spaces} parking spaces, ${fac.vehicles} vehicles, ${fac.permits} permits, ${fac.violations} violation reports, ${fac.shifts} shifts, ${fac.assets} assets`);
     console.log(`✓ seeded 2 orgs, ${Object.keys(propIds).length + 1} properties, ${unitCount + 30} units, ${residentCount} residents, ${userRows.length} demo users`);
   });
   await pool.end();

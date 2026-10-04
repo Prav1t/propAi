@@ -37,6 +37,11 @@ export const NOTIFICATION_KINDS = {
   "announcement.posted": { label: "Building announcements", emailDefault: true },
   "message.received": { label: "Replies from building management", emailDefault: true },
   "message.inbox": { label: "New messages from residents", emailDefault: false },
+  "visitor.arrived": { label: "My guests arriving or being turned away at the desk", emailDefault: false },
+  "parking.notice": { label: "Parking notices about my vehicles", emailDefault: true },
+  "parking.report": { label: "Parking reports and camera detections to review", emailDefault: false },
+  "shift.handoff": { label: "Shift handoff notes for my shift", emailDefault: false },
+  "asset.down": { label: "Equipment out of service at my properties", emailDefault: true },
 } as const;
 export type NotificationKind = keyof typeof NOTIFICATION_KINDS;
 
