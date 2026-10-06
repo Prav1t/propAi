@@ -1,5 +1,6 @@
-import type { ChatHints } from "../types";
-import type { ToolName } from "../tools/names";
+import type { ChatHints, ChatMessage } from "../types";
+import { ACTION_TOOL_NAMES, type ToolName } from "../tools/names";
+import { APPROVE_HINT, isConfirmation, planAction, planRedraft } from "./actions";
 import { addDaysIso, parseDateRange, parseDuration, parseTime } from "./dates";
 
 // The demo model: a deterministic, rule-based planner that maps common phrasings to the same typed tools a
@@ -31,7 +32,7 @@ const CATEGORY_WORDS: [string, RegExp][] = [
 const LOCATION_STOP = /^(unit|suite|apt|apartment|room|sunday|monday|tuesday|wednesday|thursday|friday|saturday|january|february|march|april|may|june|july|august|september|october|november|december|am|pm|today|tomorrow|my|our|this|next|last|all|every|each|i|demo|wo)\b/i;
 
 export function extractLocation(text: string): string | undefined {
-  const re = /\b(?:at|in|for|on|from|across)\s+(?:the\s+)?([A-Z][A-Za-z'’.-]*(?:\s+(?:[A-Z][A-Za-z'’.-]*|[A-Z0-9]{1,3}\b))*)/g;
+  const re = /\b(?:at|in|for|on|from|across|of)\s+(?:the\s+)?([A-Z][A-Za-z'’.-]*(?![0-9])(?:\s+(?:[A-Z][A-Za-z'’.-]*|[A-Z0-9]{1,3}\b))*)/g;
   for (const m of text.matchAll(re)) {
     const phrase = m[1].replace(/[.’',-]+$/, "").trim();
     if (!phrase || LOCATION_STOP.test(phrase)) continue;
@@ -64,11 +65,14 @@ export function extractTopic(text: string): string | undefined {
 
 const MUTATION = /(?:^|[.!?]\s+)(?:(?:hey|hi|ok|okay)[, ]+)?(?:(?:can|could|would|will) you\s+|please\s+|i(?:'d| would) like to\s+|i (?:want|need) to\s+|go ahead and\s+|let'?s\s+)?(create|open a|log|file|submit|raise|book|reserve|cancel|send|notify|message|email|text|tell(?!\s+me\b)|announce|post|assign|reassign|dispatch|schedule|reschedule|add|register|invite|delete|remove|update|change|close|resolve|mark|approve|reject|deny|check (?:in|out))\b/i;
 
+// questions are answered by looking things up; requests to change something are prepared as plans
+const QUESTION = /^(?:(?:hey|hi|ok|okay)[, ]+)?(who|what|which|when|where|why|how|is|are|was|were|do|does|did|has|have|any|show|list|find|search|look up|summari[sz]e|give me|tell me|get me|count)\b/i;
+
 const link = (h: ChatHints, path: string, label: string) => `[${label}](/o/${h.orgSlug}${path})`;
 
-function readOnly(h: ChatHints, what: string, path?: string, label?: string) {
-  return `I can't ${what} yet — in this release I can only look things up, and actions from chat (with a preview you approve) come next.` +
-    (path ? ` You can do it yourself here: ${link(h, path, label ?? "open the form")}.` : "");
+// changes there's no assistant action for (yet): say so and link the page where it's done
+function notFromChat(h: ChatHints, what: string, path?: string, label?: string) {
+  return `I can't ${what} from chat.` + (path ? ` You can do it here: ${link(h, path, label ?? "open the page")}.` : "");
 }
 
 function refusal(what: string) {
@@ -77,21 +81,22 @@ function refusal(what: string) {
 
 export function capabilities(h: ChatHints, available: ReadonlySet<string>): string {
   const ex = h.resident
-    ? ["Do I have any packages?", "What's the status of my maintenance requests?", "Is the party room available tomorrow at 7 PM?", "Do I have any guests coming?", "What's the emergency number for my building?"]
+    ? ["Do I have any packages?", "What's the status of my maintenance requests?", "Book the party room tomorrow at 7 PM", "My kitchen sink is leaking — please file a request", "Invite my guest Sam Lee tomorrow at 6 PM"]
     : [
         available.has("search_work_orders") && "Show me all overdue maintenance requests",
         available.has("vendor_performance") && "Which vendor has been the slowest this month?",
         available.has("search_incidents") && "Summarize today's incidents",
-        available.has("search_packages") && "Which packages have been here more than 7 days?",
-        available.has("whos_on_shift") && "Who's on shift right now?",
-        available.has("asset_history") && "Find recurring equipment problems",
+        available.has("create_work_order") && available.has("assign_work_order") && "Create a work order for the broken elevator in Tower B and assign Summit Elevator",
+        available.has("send_announcement") && "Send residents of Fraser Towers a notice saying the pool will be closed tomorrow",
+        available.has("log_package") && "A package arrived for unit 1204 in Tower A",
         available.has("ops_kpis") && "Give me my morning briefing",
       ].filter((x): x is string => !!x);
-  return `I can look up live records you have access to and answer from them. Try:\n${ex.map((e) => `- ${e}`).join("\n")}`;
+  const acts = [...available].some((n) => (ACTION_TOOL_NAMES as readonly string[]).includes(n));
+  return `I can look up live records you have access to${acts ? " and prepare changes for you to approve — nothing changes until you click Approve" : ""}. Try:\n${ex.map((e) => `- ${e}`).join("\n")}`;
 }
 
 // the whole intent table, most specific first
-export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHints): DemoPlan {
+export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHints, history?: ChatMessage[]): DemoPlan {
   const text = raw.trim();
   const t = text.toLowerCase();
   const has = (n: ToolName) => available.has(n);
@@ -107,35 +112,25 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
   if (!t) return { kind: "reply", text: capabilities(h, available) };
   if (/\b(help|what can you (do|help with)|how (do|can) i use you|what do you know)\b/.test(t)) return { kind: "reply", text: capabilities(h, available) };
 
-  // anything that would change data: look up what's useful, then say plainly that acting comes later
+  // "yes, go ahead" — approval is a button press by the user, never something the assistant does
+  if (isConfirmation(text)) return { kind: "reply", text: APPROVE_HINT };
+  if (history) {
+    const again = planRedraft(text, history, h, has);
+    if (again) return again;
+  }
+
+  // requests to change something → action tools, which only prepare a plan
+  if (!QUESTION.test(text)) {
+    const act = planAction(text, has, h);
+    if (act) return act.kind === "tools" && !act.calls.length ? { kind: "reply", text: refusal("that") } : act;
+  }
   const mut = text.match(MUTATION);
   if (mut) {
     const verb = mut[1].toLowerCase();
-    if (/^(book|reserve)$/.test(verb)) {
-      const amenity = extractAmenity(text);
-      if (!amenity) return { kind: "reply", text: `Which amenity would you like? I can check availability, for example "Is the party room free tomorrow at 7 PM?". ${readOnly(h, "make bookings", "/amenities", "Book amenities")}` };
-      return tools([{ name: "check_amenity_availability", input: {
-        amenity, date: range?.from ?? h.today, ...(parseTime(text) ? { start: parseTime(text) } : {}),
-        ...(parseDuration(text) ? { durationMinutes: parseDuration(text) } : {}), ...(unit && !h.resident ? { unit } : {}), ...loc,
-      } }], readOnly(h, "make the booking", "/amenities", "Book amenities"));
-    }
-    if (/^(cancel)$/.test(verb) && /\b(booking|reservation)/.test(t)) return { kind: "reply", text: readOnly(h, "cancel bookings", "/amenities/bookings", "Your bookings") };
-    if (/^(send|notify|message|email|text|tell|announce|post)$/.test(verb)) {
-      if (/\bpackage|parcel|deliver/.test(t) && !h.resident) return { kind: "reply", text: readOnly(h, "log packages or notify residents", "/packages/new", "Log a package — the resident is notified automatically") };
-      return { kind: "reply", text: h.resident ? readOnly(h, "send messages", "/messages", "Messages") : readOnly(h, "send messages or announcements", "/announcements/new", "New announcement") };
-    }
-    if (/^(schedule|reschedule)$/.test(verb) && /\binspection/.test(t)) return { kind: "reply", text: readOnly(h, "schedule inspections", "/inspections/new", "Schedule an inspection") };
-    if (/^(register|invite)$/.test(verb) || /\b(visitor|guest)s?\b/.test(t) && /^(add|register|invite)$/.test(verb)) return { kind: "reply", text: readOnly(h, "register visitors", "/visitors/new", h.resident ? "Invite a guest" : "Register a visitor") };
-    if (/^(assign|reassign|dispatch)$/.test(verb)) return { kind: "reply", text: readOnly(h, "assign work", "/maintenance", "Maintenance") };
-    if (/^(create|open a|log|file|submit|raise)$/.test(verb) && /\b(work ?orders?|maintenance|requests?|repairs?|tickets?|broken|leak\w*|not working|down)\b/.test(t)) {
-      const category = extractCategory(text);
-      const note = readOnly(h, "create work orders", "/maintenance/new", "New maintenance request");
-      if (category && has("search_work_orders")) return { kind: "tools", calls: [{ name: "search_work_orders", input: { view: "open", category, ...loc } }], note: `${note} I checked for similar open requests first so you don't file a duplicate.` };
-      return { kind: "reply", text: note };
-    }
-    if (/^(create|add|log|file|submit|raise)$/.test(verb) && /\bincident/.test(t)) return { kind: "reply", text: readOnly(h, "report incidents", "/incidents/new", "Report an incident") };
-    if (/^(create|add)$/.test(verb) && /\btask/.test(t)) return { kind: "reply", text: readOnly(h, "create tasks", "/tasks/new", "New task") };
-    return { kind: "reply", text: readOnly(h, "make changes") };
+    if (/^(approve|reject|deny)$/.test(verb)) return { kind: "reply", text: notFromChat(h, "approve or reject requests", h.resident ? "/amenities/bookings" : "/amenities/bookings?view=pending", h.resident ? "Your bookings" : "Bookings waiting for approval") };
+    if (/^check (in|out)$/.test(verb)) return { kind: "reply", text: notFromChat(h, "check visitors in or out", "/visitors", "Visitors") };
+    if (/^(delete|remove)$/.test(verb)) return { kind: "reply", text: "I don't delete records. Open the record to archive or cancel it, or ask me to cancel a specific request or booking." };
+    return { kind: "reply", text: `I didn't catch which change you want. ${capabilities(h, available)}` };
   }
 
   const woNumber = text.match(/\b(?:wo|work\s*order|request|ticket|job)\s*(?:#|no\.?|number)?\s*-?\s*(\d{1,7})\b/i);

@@ -9,11 +9,13 @@ import { FormAlert } from "@/components/ui/form";
 import { Icon } from "@/components/shell/icons";
 import { cn } from "@/lib/cn";
 import { MarkdownView } from "./markdown-view";
+import { PlanCard, type PlanUi } from "./plan-card";
 
 export type StepUi = { callId: string; tool: string; title: string; state: "running" | "done"; outcome?: string; summary?: string | null; display?: ToolDisplay | null };
 export type TurnUi = {
   key: string; question: string; steps: StepUi[]; answer: string; state: "running" | "done" | "error" | "stopped";
   status?: string; notice?: string; error?: string; provider?: string | null;
+  plan?: PlanUi | null; // changes prepared in this turn
 };
 export type ModeOption = { key: string; label: string; description: string; suggestions: string[] };
 
@@ -63,13 +65,15 @@ function ResultCards({ display }: { display: ToolDisplay }) {
   );
 }
 
+const FINE = new Set(["ok", "pending", "executed"]);
+
 function StepLine({ s, answer }: { s: StepUi; answer: string }) {
-  const failed = s.state === "done" && s.outcome !== "ok";
+  const failed = s.state === "done" && !FINE.has(s.outcome ?? "");
   // the demo model answers with the tool's own summary; don't print it twice
   const showSummary = !!s.summary && !answer.includes(s.summary);
   return (
     <li className="flex items-start gap-2 text-[13px]">
-      <span aria-hidden className={cn("mt-1 inline-block size-2 shrink-0 rounded-full", s.state === "running" ? "animate-pulse bg-accent" : failed ? "bg-warning" : "bg-success")} />
+      <span aria-hidden className={cn("mt-1 inline-block size-2 shrink-0 rounded-full", s.state === "running" ? "animate-pulse bg-accent" : failed ? "bg-warning" : s.outcome === "pending" ? "bg-accent" : "bg-success")} />
       <span className="min-w-0 text-muted">
         <span className="font-medium text-fg">{s.title}</span>
         {s.state === "running" ? "…" : showSummary ? <> — {s.summary}</> : null}
@@ -78,7 +82,7 @@ function StepLine({ s, answer }: { s: StepUi; answer: string }) {
   );
 }
 
-export function TurnView({ t, assistantName }: { t: TurnUi; assistantName: string }) {
+export function TurnView({ t, assistantName, orgSlug, onPlanChange }: { t: TurnUi; assistantName: string; orgSlug: string; onPlanChange?: (p: PlanUi) => void }) {
   const cards = t.steps.filter((s) => s.display && (s.display.records?.length || s.display.metrics?.length));
   return (
     <article className="space-y-3" aria-label={`Question: ${t.question}`}>
@@ -89,13 +93,14 @@ export function TurnView({ t, assistantName }: { t: TurnUi; assistantName: strin
         <span aria-hidden className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Icon name="sparkle" /></span>
         <div className="min-w-0 flex-1 space-y-3">
           <span className="sr-only">{assistantName}:</span>
-          {t.steps.length ? <ol aria-label="What was looked up" className="space-y-1">{t.steps.map((s) => <StepLine key={s.callId} s={s} answer={t.answer} />)}</ol> : null}
+          {t.steps.length ? <ol aria-label="What the assistant did" className="space-y-1">{t.steps.map((s) => <StepLine key={s.callId} s={s} answer={t.answer} />)}</ol> : null}
           {t.state === "running" && !t.answer ? <p role="status" className="animate-pulse text-[13px] text-muted">{t.status ?? "Thinking"}…</p> : null}
           {t.answer ? <MarkdownView text={t.answer} /> : null}
           {t.notice ? <FormAlert kind="info">{t.notice}</FormAlert> : null}
           {t.error ? <FormAlert>{t.error}</FormAlert> : null}
           {t.state === "stopped" ? <p className="text-xs text-faint">Stopped.</p> : null}
           {cards.length ? <div className="space-y-2">{cards.map((s) => <ResultCards key={s.callId} display={s.display!} />)}</div> : null}
+          {t.plan ? <PlanCard plan={t.plan} orgSlug={orgSlug} onChange={onPlanChange} /> : null}
           {t.provider === "demo" && t.state !== "running" ? (
             <p className="flex items-center gap-1.5 text-[11px] text-faint"><Badge tone="warning">Demo mode</Badge> Answered by fixed rules from live records — no language model.</p>
           ) : null}
@@ -124,6 +129,21 @@ export function AssistantChat(props: {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState(props.initialMode);
   const convRef = useRef<string | null>(props.conversationId);
+  // The page keeps this component mounted when the URL gains ?c= for a conversation it just started, so a plan
+  // card the user is already editing isn't torn down; opening a different conversation (or a new one) resets it.
+  const [shown, setShown] = useState({ loaded: props.conversationId, own: props.conversationId });
+  if (props.conversationId !== shown.loaded) {
+    const switched = props.conversationId !== shown.own;
+    setShown({ loaded: props.conversationId, own: switched ? props.conversationId : shown.own });
+    if (switched) {
+      setTurns(props.initialTurns);
+      setMode(props.initialMode);
+      setInput("");
+    }
+  }
+  useEffect(() => {
+    convRef.current = shown.own;
+  }, [shown.own]);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -160,6 +180,7 @@ export function AssistantChat(props: {
         switch (ev.type) {
           case "start":
             convRef.current = ev.conversationId as string;
+            setShown((x) => ({ ...x, own: ev.conversationId as string }));
             patch(key, (t) => ({ ...t, provider: ev.provider as string }));
             break;
           case "status":
@@ -177,6 +198,12 @@ export function AssistantChat(props: {
           case "notice":
             patch(key, (t) => ({ ...t, notice: ev.message as string }));
             break;
+          case "plan": {
+            const plan = ev.plan as PlanUi;
+            // only the newest plan in a conversation can be approved; older pending ones were superseded on the server
+            setTurns((ts) => ts.map((t) => (t.key === key ? { ...t, plan } : t.plan?.status === "pending" ? { ...t, plan: { ...t.plan, status: "superseded", canDecide: false } } : t)));
+            break;
+          }
           case "error":
             patch(key, (t) => ({ ...t, error: ev.message as string }));
             break;
@@ -235,7 +262,7 @@ export function AssistantChat(props: {
             <span aria-hidden className="mx-auto inline-flex size-10 items-center justify-center rounded-full bg-accent-soft text-accent"><Icon name="sparkle" className="size-5" /></span>
             <p className="mt-3 text-base font-medium">How can I help?</p>
             <p className="mx-auto mt-1 max-w-md text-[13px] text-muted">
-              I look up live records you&apos;re allowed to see and answer from them, with links. In this version I can only read — I can&apos;t change anything yet.
+              I look up live records you&apos;re allowed to see and answer from them, with links. I can also prepare changes — work orders, bookings, notices and more — and they only happen after you approve them.
             </p>
             {props.demo.on ? <p className="mx-auto mt-2 max-w-md text-[12px] text-faint">Demo mode: no language model is connected, so I understand a fixed set of questions like the ones below.</p> : null}
             <div className="mx-auto mt-5 flex max-w-xl flex-wrap justify-center gap-2">
@@ -244,7 +271,10 @@ export function AssistantChat(props: {
               ))}
             </div>
           </div>
-        ) : turns.map((t) => <TurnView key={t.key} t={t} assistantName={props.assistantName} />)}
+        ) : turns.map((t) => (
+          <TurnView key={t.key} t={t} assistantName={props.assistantName} orgSlug={props.orgSlug}
+            onPlanChange={(plan) => setTurns((ts) => ts.map((x) => (x.key === t.key ? { ...x, plan } : x)))} />
+        ))}
         <div ref={endRef} />
       </div>
 
@@ -277,7 +307,7 @@ export function AssistantChat(props: {
             <Button type="submit" size="sm" disabled={!input.trim()} aria-label="Send"><Icon name="send" /></Button>
           )}
         </div>
-        <p className="mt-1.5 px-1 text-[11px] text-faint">Answers come only from records you can access. Check important details on the linked record.</p>
+        <p className="mt-1.5 px-1 text-[11px] text-faint">Answers come only from records you can access. Changes happen only after you approve them.</p>
       </form>
     </div>
   );

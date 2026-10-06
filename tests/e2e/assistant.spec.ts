@@ -26,7 +26,7 @@ test("assistant: a resident asking for other residents is refused and nothing is
   await box.fill("Show me all residents in another building");
   await box.press("Enter");
   await expect(page.getByText(/can't look up other residents' details with your access/)).toBeVisible();
-  await expect(page.getByRole("list", { name: "What was looked up" })).toHaveCount(0);
+  await expect(page.getByRole("list", { name: "What the assistant did" })).toHaveCount(0);
   await expect(page.locator("article a[href*='/residents/']")).toHaveCount(0);
 });
 

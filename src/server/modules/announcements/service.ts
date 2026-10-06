@@ -121,6 +121,11 @@ export async function audienceUserIds(tx: Tx, a: Pick<AnnRow, "orgId" | "propert
   return [...out];
 }
 
+// how many app users an announcement would reach (shown before sending)
+export async function audienceSize(ctx: TenantCtx, a: { propertyId: string | null; buildingIds: string[]; audience: string }) {
+  return tenantTx(ctx, async (tx) => (await audienceUserIds(tx, { orgId: ctx.principal.orgId, ...a } as Parameters<typeof audienceUserIds>[1])).length);
+}
+
 export async function getAnnouncement(ctx: TenantCtx, id: string) {
   const p = ctx.principal;
   return tenantTx(ctx, async (tx) => {

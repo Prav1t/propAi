@@ -1539,7 +1539,9 @@ export const assetDowntime = pgTable(
 /* ───────────────────────── AI assistant (Iteration 6) ───────────────────────── */
 
 export const AI_MODES = ["property", "maintenance", "frontdesk", "facility", "resident"] as const;
-export const AI_TOOL_OUTCOMES = ["ok", "denied", "invalid", "not_found", "ambiguous", "error", "unknown_tool"] as const;
+export const AI_TOOL_OUTCOMES = ["ok", "denied", "invalid", "not_found", "ambiguous", "error", "unknown_tool", "pending", "executed", "policy_denied"] as const;
+export const AI_APPROVAL_STATUSES = ["pending", "executing", "executed", "failed", "partially_failed", "rejected", "expired", "superseded"] as const;
+export const AI_POLICY_MODES = ["auto", "confirm", "deny"] as const;
 export const AI_USAGE_OUTCOMES = ["ok", "error", "timeout", "step_limit", "cap_reached", "disabled"] as const;
 
 // a user's private conversation with the assistant (RLS: own org AND own user)
@@ -1607,12 +1609,14 @@ export const aiToolCalls = pgTable(
     resultCount: integer("result_count"),
     display: jsonb("display"), // record cards / metrics rendered from the tool result, never from model text
     durationMs: integer("duration_ms").notNull().default(0),
+    approvalId: uuid("approval_id").references((): AnyPgColumn => aiApprovals.id, { onDelete: "set null" }), // action steps: the plan they belong to
     createdAt: createdAt(),
   },
   (t) => [
     index("ai_tool_calls_org_idx").on(t.orgId, t.createdAt),
     index("ai_tool_calls_turn_idx").on(t.conversationId, t.turnId),
-    check("ai_tool_calls_outcome_ck", sql`${t.outcome} in ('ok','denied','invalid','not_found','ambiguous','error','unknown_tool')`),
+    index("ai_tool_calls_approval_idx").on(t.approvalId),
+    check("ai_tool_calls_outcome_ck", sql`${t.outcome} in ('ok','denied','invalid','not_found','ambiguous','error','unknown_tool','pending','executed','policy_denied')`),
     check("ai_tool_calls_risk_ck", sql`${t.riskClass} between 1 and 5`),
   ],
 );
@@ -1644,5 +1648,55 @@ export const aiUsage = pgTable(
     index("ai_usage_user_idx").on(t.orgId, t.userId, t.createdAt),
     uniqueIndex("ai_usage_turn_uq").on(t.turnId),
     check("ai_usage_outcome_ck", sql`${t.outcome} in ('ok','error','timeout','step_limit','cap_reached','disabled')`),
+  ],
+);
+
+/* ───────────────────────── AI actions (Iteration 7) ───────────────────────── */
+
+// a dry-run plan of assistant actions: nothing in it runs until it's approved (or a policy allows it to run on its own)
+export const aiApprovals = pgTable(
+  "ai_approvals",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => aiConversations.id, { onDelete: "set null" }),
+    turnId: uuid("turn_id").notNull(),
+    requestedByUserId: uuid("requested_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    mode: text("mode").notNull().default("confirm"), // confirm = a person approved it; auto = an org policy let it run
+    status: text("status").notNull().default("pending"),
+    steps: jsonb("steps").notNull().default([]), // [{ id, tool, riskClass, policyKeys, input, resolved, title, details, effects, confirm }]
+    results: jsonb("results"), // [{ stepId, status, summary, record, verified, error }]
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: ts("decided_at"),
+    executedAt: ts("executed_at"),
+    expiresAt: ts("expires_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("ai_approvals_user_idx").on(t.orgId, t.requestedByUserId, t.status, t.createdAt),
+    index("ai_approvals_conversation_idx").on(t.conversationId),
+    check("ai_approvals_mode_ck", sql`${t.mode} in ('confirm','auto')`),
+    check("ai_approvals_status_ck", sql`${t.status} in ('pending','executing','executed','failed','partially_failed','rejected','expired','superseded')`),
+  ],
+);
+
+// per-organization (or per-property) rules for what the assistant may do on its own, must ask about, or never do
+export const aiPolicies = pgTable(
+  "ai_policies",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }), // null = whole organization
+    action: text("action").notNull(), // policy key, e.g. "workorder.create"
+    mode: text("mode").notNull(),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("ai_policies_org_uq").on(t.orgId, t.action).where(sql`${t.propertyId} is null`),
+    uniqueIndex("ai_policies_property_uq").on(t.orgId, t.propertyId, t.action).where(sql`${t.propertyId} is not null`),
+    check("ai_policies_mode_ck", sql`${t.mode} in ('auto','confirm','deny')`),
   ],
 );

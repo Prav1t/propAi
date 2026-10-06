@@ -15,6 +15,7 @@ export type EvalRun = {
   events: AssistantEvent[];
   calls: { tool: string; args: Record<string, unknown>; outcome: string }[];
   results: { tool: string; content: string }[];
+  plan: { tools: string[] } | null;
   today: string;
   ms: number;
 };
@@ -39,7 +40,7 @@ export async function runEvalCase(c: EvalCase): Promise<EvalRun> {
       if (ev.type === "start") turnId = ev.turnId;
     }
   } catch (e) {
-    if (e instanceof ForbiddenError) return { forbidden: true, answer: "", events, calls: [], results: [], today, ms: Date.now() - t0 };
+    if (e instanceof ForbiddenError) return { forbidden: true, answer: "", events, calls: [], results: [], plan: null, today, ms: Date.now() - t0 };
     throw e;
   }
   const { calls, results } = turnId
@@ -50,8 +51,9 @@ export async function runEvalCase(c: EvalCase): Promise<EvalRun> {
           .where(and(eq(aiMessages.turnId, turnId!), eq(aiMessages.role, "tool"))).orderBy(asc(aiMessages.seq)),
       }))
     : { calls: [], results: [] };
+  const planEv = events.find((ev) => ev.type === "plan") as Extract<AssistantEvent, { type: "plan" }> | undefined;
   return {
-    forbidden: false, answer, events, today, ms: Date.now() - t0,
+    forbidden: false, answer, events, today, ms: Date.now() - t0, plan: planEv ? { tools: planEv.plan.steps.map((st) => st.tool) } : null,
     calls: calls.map((x) => ({ tool: x.tool, args: (x.args ?? {}) as Record<string, unknown>, outcome: x.outcome })),
     results: results.map((x) => ({ tool: x.tool ?? "", content: x.content })),
   };
@@ -80,6 +82,10 @@ export function checkEvalCase(c: EvalCase, r: EvalRun): string[] {
   for (const re of e.answerMatches ?? []) if (!re.test(r.answer)) fail.push(`answer should match ${re}`);
   for (const re of e.answerExcludes ?? []) if (re.test(r.answer)) fail.push(`answer must not match ${re}`);
   if (e.asksQuestion && !/\?\s*$/.test(r.answer.trim())) fail.push("answer should end by asking the user a question");
+  if (e.plan && JSON.stringify(r.plan?.tools ?? null) !== JSON.stringify(e.plan)) fail.push(`expected a plan with ${e.plan.join(", ")}; got ${r.plan ? r.plan.tools.join(", ") : "no plan"}`);
+  if (e.noPlan && r.plan) fail.push(`expected no plan; got one with ${r.plan.tools.join(", ")}`);
+  for (const t of e.executed ?? []) if (!r.calls.some((x) => x.tool === t && x.outcome === "executed")) fail.push(`expected ${t} to run under the organization's policy`);
+  if (e.noExecution && r.calls.some((x) => x.outcome === "executed")) fail.push(`nothing should have run, but ${r.calls.filter((x) => x.outcome === "executed").map((x) => x.tool).join(", ")} did`);
   if (e.resultsOnlyAt) {
     for (const res of r.results) {
       try {

@@ -14,7 +14,7 @@ export function AiSettingsForm({ orgSlug, enabled, cap, used }: { orgSlug: strin
       <FormAlert kind="success">{state.ok ? state.message : null}</FormAlert>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" name="enabled" defaultChecked={state.values ? state.values.enabled === "on" : enabled} className="mt-0.5 size-4 accent-[var(--color-accent)]" />
-        <span>Let people in this organization use the assistant<span className="block text-xs text-muted">It can only read what each person&apos;s role allows; it can&apos;t change data in this version.</span></span>
+        <span>Let people in this organization use the assistant<span className="block text-xs text-muted">It works only with what each person&apos;s role allows, and changes wait for their approval unless a rule below says otherwise.</span></span>
       </label>
       <Field label="Monthly request limit" name="monthlyRequestCap" error={state.fieldErrors?.monthlyRequestCap}
         hint={`Leave blank for no limit. Used so far this month: ${used.toLocaleString("en-CA")}. When the limit is reached, questions are refused until next month.`}>

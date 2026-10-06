@@ -1,17 +1,25 @@
 import { notFound } from "next/navigation";
 import { getOrgContext } from "@/server/org-context";
 import { usageOverview } from "@/server/ai/usage";
+import { listPolicies } from "@/server/ai/policies";
+import { recentPlans } from "@/server/ai/approvals";
 import { providerStatus } from "@/server/ai/providers";
 import { aiConfig } from "@/server/ai/config";
 import { BRAND } from "@/config/brand";
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th } from "@/components/ui/primitives";
 import { fmtDateTime } from "@/lib/time";
 import { AiSettingsForm } from "./ai-settings-form";
+import { PolicyTable } from "./policy-table";
 
 export const metadata = { title: "AI assistant settings" };
 
 const OUTCOME_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
   ok: "success", ambiguous: "neutral", not_found: "neutral", denied: "warning", invalid: "warning", unknown_tool: "danger", error: "danger",
+  pending: "neutral", executed: "success", policy_denied: "warning",
+};
+const PLAN_STATUS: Record<string, [string, "success" | "warning" | "danger" | "neutral" | "accent"]> = {
+  pending: ["Waiting", "warning"], executing: ["Running", "accent"], executed: ["Done", "success"], partially_failed: ["Partly done", "warning"],
+  failed: ["Didn't run", "danger"], rejected: ["Cancelled", "neutral"], expired: ["Expired", "neutral"], superseded: ["Replaced", "neutral"],
 };
 const n = (v: number | null | undefined) => (v ?? 0).toLocaleString("en-CA");
 const usd = (v: number | null) => (v === null ? "—" : v < 0.01 && v > 0 ? "< $0.01" : `$${v.toFixed(2)}`);
@@ -20,7 +28,7 @@ export default async function AiSettingsPage({ params }: PageProps<"/o/[orgSlug]
   const { orgSlug } = await params;
   const { principal, ctx } = await getOrgContext(orgSlug);
   if (!principal.permissions.has("ai.settings.manage")) notFound();
-  const u = await usageOverview(ctx);
+  const [u, policies, plans] = await Promise.all([usageOverview(ctx), listPolicies(ctx), recentPlans(ctx)]);
   const status = providerStatus();
   const cfg = aiConfig();
   return (
@@ -46,10 +54,36 @@ export default async function AiSettingsPage({ params }: PageProps<"/o/[orgSlug]
               <dd>{status.demo ? <><Badge tone="warning">Demo mode</Badge> <span className="text-[13px] text-muted">No language model — {status.reason}.</span></> : status.provider}</dd>
               <dt className="text-muted">Model</dt><dd className="font-mono text-[13px]">{status.model}</dd>
               <dt className="text-muted">Limits</dt><dd className="text-[13px]">{cfg.maxSteps} lookups per answer · {Math.round(cfg.timeoutMs / 1000)} s timeout · {cfg.requestsPerMinute} questions per person per minute</dd>
-              <dt className="text-muted">Access</dt><dd className="text-[13px]">Read-only tools, filtered by each person&apos;s role and properties. Conversations are private to their author.</dd>
+              <dt className="text-muted">Access</dt><dd className="text-[13px]">Tools are filtered by each person&apos;s role and properties. Changes are prepared as plans the person approves, unless a rule below lets a low-risk change run on its own. Conversations are private to their author.</dd>
             </dl>
           </Panel>
         </div>
+
+        <Panel>
+          <PanelHeader title="What the assistant may do"
+            description={`${BRAND.assistantName} only ever acts as the person asking, with their permissions. These rules decide whether a change waits for their approval (the default), runs on its own, or isn't offered at all. A property rule overrides the organization rule. Anything that contacts residents always needs approval.`} />
+          <PolicyTable orgSlug={orgSlug} rows={policies.rows} properties={policies.properties} />
+        </Panel>
+
+        <Panel>
+          <PanelHeader title="Recent plans" description="Changes the assistant prepared, and what became of them. Each change it made is also in the audit log, marked as AI-generated with the plan it belongs to." />
+          {plans.length ? (
+            <Table>
+              <thead><tr><Th>When</Th><Th>Person</Th><Th>Change</Th><Th>How</Th><Th>Status</Th></tr></thead>
+              <tbody>
+                {plans.map((r) => (
+                  <tr key={r.id}>
+                    <Td className="whitespace-nowrap text-[13px] text-muted">{fmtDateTime(r.createdAt, u.tz)}</Td>
+                    <Td className="text-[13px]">{r.requestedBy ?? "Former member"}</Td>
+                    <Td className="max-w-80 text-[13px]"><span className="line-clamp-2">{r.title}{r.steps > 1 ? ` (+${r.steps - 1} more)` : ""}</span><span className="block font-mono text-[11px] text-faint">{r.tools.join(", ")}</span></Td>
+                    <Td className="text-[13px]">{r.mode === "auto" ? "By policy" : "Approval"}</Td>
+                    <Td><Badge tone={PLAN_STATUS[r.status]?.[1] ?? "neutral"}>{PLAN_STATUS[r.status]?.[0] ?? r.status}</Badge></Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          ) : <EmptyState title="No plans yet">When someone asks the assistant to make a change, it shows up here.</EmptyState>}
+        </Panel>
 
         <Panel>
           <PanelHeader title="By person" />

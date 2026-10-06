@@ -139,3 +139,40 @@ export async function resolveVendor(ctx: TenantCtx, raw: string): Promise<{ id: 
 }
 
 export const isErr = (v: unknown): v is ToolErr => !!v && typeof v === "object" && (v as { ok?: unknown }).ok === false;
+
+// a resident's own units with labels (for actions that default to "my unit")
+export async function myUnits(ctx: TenantCtx): Promise<UnitRef[]> {
+  const p = ctx.principal;
+  if (!p.unitIds.size) return [];
+  const rows = await tenantTx(ctx, (tx) =>
+    tx.select({ id: units.id, number: units.number, buildingId: units.buildingId, propertyId: units.propertyId, building: buildings.name, property: properties.name })
+      .from(units).innerJoin(buildings, eq(buildings.id, units.buildingId)).innerJoin(properties, eq(properties.id, units.propertyId))
+      .where(and(eq(units.orgId, p.orgId), inArray(units.id, [...p.unitIds]))).orderBy(asc(units.number)),
+  );
+  return rows.map((r) => ({ id: r.id, number: r.number, buildingId: r.buildingId, propertyId: r.propertyId, label: `Unit ${r.number} · ${r.building} · ${r.property}` }));
+}
+
+// "which property?" when none was named: the only one in scope, or everything for org-wide roles if allowed, else ask
+export async function propertyFor(ctx: TenantCtx, place: Place | null, opts: { allowOrgWide?: boolean } = {}): Promise<{ propertyId: string | null; buildingId: string | null; label: string } | ToolErr> {
+  if (place?.propertyId) return { propertyId: place.propertyId, buildingId: place.buildingId, label: place.label };
+  const ids = visiblePropertyIds(ctx.principal);
+  const rows = await tenantTx(ctx, (tx) => tx.select({ id: properties.id, name: properties.name }).from(properties)
+    .where(and(eq(properties.orgId, ctx.principal.orgId), ids === null ? undefined : ids.length ? inArray(properties.id, ids) : sql`false`)).orderBy(asc(properties.name)));
+  if (rows.length === 1) return { propertyId: rows[0].id, buildingId: null, label: rows[0].name };
+  if (opts.allowOrgWide && ctx.principal.role.scopeLevel === "org") return { propertyId: null, buildingId: null, label: "All properties" };
+  if (!rows.length) return err("FORBIDDEN", "You don't have access to any property for this.");
+  return err("AMBIGUOUS", "Which property is this for?", rows.map((r) => r.name));
+}
+
+// one building, given a place that may be a property with several buildings
+export async function buildingFor(ctx: TenantCtx, place: Place | null): Promise<{ propertyId: string; buildingId: string; label: string } | ToolErr> {
+  const prop = await propertyFor(ctx, place);
+  if (isErr(prop)) return prop;
+  if (prop.buildingId && prop.propertyId) return { propertyId: prop.propertyId, buildingId: prop.buildingId, label: prop.label };
+  const rows = await tenantTx(ctx, (tx) => tx.select({ id: buildings.id, name: buildings.name, property: properties.name }).from(buildings)
+    .innerJoin(properties, eq(properties.id, buildings.propertyId))
+    .where(and(eq(buildings.orgId, ctx.principal.orgId), eq(buildings.propertyId, prop.propertyId!), buildingVisible(ctx))).orderBy(asc(buildings.name)));
+  if (rows.length === 1) return { propertyId: prop.propertyId!, buildingId: rows[0].id, label: `${rows[0].name} · ${rows[0].property}` };
+  if (!rows.length) return err("NOT_FOUND", `No building you can see at ${prop.label}.`);
+  return err("AMBIGUOUS", `Which building at ${prop.label}?`, rows.map((r) => `${r.name} · ${r.property}`));
+}

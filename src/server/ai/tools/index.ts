@@ -9,12 +9,17 @@ import { checkAmenityAvailability, recentAnnouncements, searchBookings, searchPa
 import { searchVisitors, shiftSummary, whosOnShift } from "./frontdesk";
 import { calendarRange, opsKpis, searchComplaints, searchIncidents, searchInspections, searchTasks } from "./ops";
 import { assetHistory } from "./facility";
+import { assignWorkOrderAction, commentOnWorkOrderAction, createWorkOrderAction, updateWorkOrderStatusAction } from "./actions-maintenance";
+import { createIncidentAction, createTaskAction, scheduleInspectionAction } from "./actions-ops";
+import { cancelBookingAction, createBookingAction, logPackageAction, messageResidentAction, registerVisitorAction, sendAnnouncementAction } from "./actions-community";
 
-// the complete registry; Iteration 6 tools are all read-only (risk class 1)
+// the complete registry: read tools (risk class 1) run immediately; actions are prepared as plans
 export const ALL_TOOLS: ToolDef[] = [
   searchWorkOrders, getWorkOrderTool, searchProperties, searchUnits, searchResidents, myHome, searchVendors, vendorPerformanceTool,
   searchBookings, checkAmenityAvailability, searchPackages, searchVisitors, searchIncidents, searchComplaints, searchTasks, searchInspections,
   assetHistory, whosOnShift, shiftSummary, opsKpis, calendarRange, recentAnnouncements,
+  createWorkOrderAction, assignWorkOrderAction, updateWorkOrderStatusAction, commentOnWorkOrderAction, createTaskAction, scheduleInspectionAction,
+  createBookingAction, cancelBookingAction, logPackageAction, registerVisitorAction, createIncidentAction, sendAnnouncementAction, messageResidentAction,
 ] as ToolDef[];
 
 const BY_NAME = new Map(ALL_TOOLS.map((t) => [t.name, t]));

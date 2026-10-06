@@ -277,7 +277,7 @@ async function main() {
   await pool.end();
   // after the commit: the assistant runs through the app's own connection and permission checks
   const ai = await seedAi();
-  console.log(`✓ assistant: ${ai.conversations} conversations, ${ai.toolCalls} tool calls (demo model)`);
+  console.log(`✓ assistant: ${ai.conversations} conversations, ${ai.toolCalls} tool calls, ${ai.plans} plans (demo model)`);
 }
 
 main().catch((e) => {

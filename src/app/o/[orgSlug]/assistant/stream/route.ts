@@ -16,7 +16,7 @@ const body = z.object({
   mode: z.string().max(20).nullish(),
 });
 
-// streams one assistant turn as newline-delimited JSON events (start, status, tool_start/tool_end, text, notice/error, done)
+// streams one assistant turn as newline-delimited JSON events (start, status, tool_start/tool_end, text, plan, notice/error, done)
 export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assistant/stream">) {
   if (!isSameOrigin(req)) return jsonError(403, "Cross-site request refused.");
   if (!req.headers.get("content-type")?.startsWith("application/json")) return jsonError(415, "Send JSON.");
@@ -65,6 +65,9 @@ export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assista
       } catch {
         /* already closed */
       }
+      // a policy may have let a change run during the turn: deliver the notifications it emitted
+      const { drainOutbox } = await import("@/server/modules/notifications/service");
+      await drainOutbox().catch(() => {});
     },
     async cancel() {
       await gen.return(undefined);

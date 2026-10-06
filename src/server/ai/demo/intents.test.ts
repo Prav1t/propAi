@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { planDemo, extractAmenity, extractLocation, extractTopic, extractUnit } from "./intents";
 import { addDaysIso, parseDateRange, parseDuration, parseTime } from "./dates";
-import { TOOL_NAMES } from "../tools/names";
+import { ACTION_TOOL_NAMES, TOOL_NAMES } from "../tools/names";
 import { composeFromResults } from "../providers/demo";
 
 const ALL = new Set<string>(TOOL_NAMES);
-const RESIDENT = new Set<string>(["my_home", "search_work_orders", "get_work_order", "search_bookings", "check_amenity_availability", "search_packages", "search_visitors", "recent_announcements", "search_complaints", "search_incidents"]);
+const RESIDENT = new Set<string>(["my_home", "search_work_orders", "get_work_order", "search_bookings", "check_amenity_availability", "search_packages", "search_visitors", "recent_announcements", "search_complaints", "search_incidents",
+  "create_work_order", "comment_on_work_order", "create_booking", "cancel_booking", "register_visitor", "create_incident"]);
+const READ_ONLY = new Set<string>([...ALL].filter((n) => !(ACTION_TOOL_NAMES as readonly string[]).includes(n)));
 const staff = { today: "2026-10-04", timeZone: "America/Vancouver", resident: false, orgSlug: "acme" };
 const resident = { ...staff, resident: true };
 
@@ -20,24 +22,30 @@ describe("demo intent planner — the six scenarios from the brief", () => {
   it("overdue work across properties", () => {
     expect(call("Show me all overdue maintenance requests across my properties.")).toEqual([{ name: "search_work_orders", input: { view: "overdue" } }]);
   });
-  it("create a work order: looks for duplicates, then says it can't act yet", () => {
-    const p = plan("Create a maintenance request for the broken elevator in Tower B.");
-    expect(p).toMatchObject({ kind: "tools", calls: [{ name: "search_work_orders", input: { view: "open", category: "elevator", location: "Tower B" } }] });
-    expect(p.kind === "tools" && p.note).toMatch(/can't create work orders yet.*\/o\/acme\/maintenance\/new/);
+  it("create a work order: looks for duplicates, then prepares the work order (and the assignment) as a plan", () => {
+    expect(call("Create a maintenance request for the broken elevator in Tower B and assign Summit Elevator.")).toEqual([
+      { name: "search_work_orders", input: { view: "open", category: "elevator", location: "Tower B", limit: 3 } },
+      { name: "create_work_order", input: { title: "Broken elevator", category: "elevator", location: "Tower B", assignVendor: "Summit Elevator" } },
+    ]);
   });
   it("slowest vendor this month", () => {
     expect(call("Which vendor has been the slowest this month?")).toEqual([{ name: "vendor_performance", input: { from: "2026-09-04", to: "2026-10-04" } }]);
   });
-  it("book the party room: availability with the requested slot", () => {
-    expect(call("Book the party room tomorrow at 7 PM.", RESIDENT, resident)).toEqual([{ name: "check_amenity_availability", input: { amenity: "party room", date: "2026-10-05", start: "19:00" } }]);
+  it("book the party room: prepares the booking, which runs the real booking rules", () => {
+    expect(call("Book the party room tomorrow at 7 PM.", RESIDENT, resident)).toEqual([{ name: "create_booking", input: { amenity: "party room", date: "2026-10-05", start: "19:00" } }]);
+    // without a time it checks availability and asks
+    const p = plan("Book the party room tomorrow", RESIDENT, resident);
+    expect(p).toMatchObject({ kind: "tools", calls: [{ name: "check_amenity_availability", input: { amenity: "party room", date: "2026-10-05" } }] });
+    expect(p.kind === "tools" && p.note).toMatch(/start time/);
   });
   it("today's incidents", () => {
     expect(call("Summarize today's incidents.")).toEqual([{ name: "search_incidents", input: { since: "2026-10-04", until: "2026-10-04" } }]);
   });
-  it("messaging residents is refused honestly with a link", () => {
-    const p = plan("Send residents a message saying the pool will be closed tomorrow.");
-    expect(p.kind).toBe("reply");
-    expect(p.kind === "reply" && p.text).toMatch(/can't send messages.*\/o\/acme\/announcements\/new/);
+  it("messaging residents drafts an announcement for approval, with the date spelled out", () => {
+    const [c] = call("Send residents a message saying the pool will be closed tomorrow.");
+    expect(c.name).toBe("send_announcement");
+    expect(c.input).toMatchObject({ title: "The pool will be closed tomorrow", audience: "residents", category: "maintenance", tone: "professional", about: "the pool will be closed tomorrow" });
+    expect(String(c.input.body)).toContain("The pool will be closed tomorrow (Monday, October 5).");
   });
 });
 
@@ -65,8 +73,12 @@ describe("demo intent planner — permissions and phrasing", () => {
     expect(call("Show open work orders at Harbour Centre")[0].input).toEqual({ view: "open", location: "Harbour Centre" });
   });
   it("treats 'tell me about' as a question, not a message to send", () => {
-    expect(plan("Tell me about the generator").kind).toBe("tools");
-    expect(plan("Tell residents the gym is closed").kind).toBe("reply");
+    expect(call("Tell me about the generator")[0].name).toBe("asset_history");
+    expect(call("Tell residents that the gym is closed")[0].name).toBe("send_announcement");
+  });
+  it("without action tools, a change request is answered honestly instead of prepared", () => {
+    const p = plan("Send residents a message saying the pool will be closed tomorrow.", READ_ONLY);
+    expect(p.kind === "reply" && p.text).toMatch(/can't send announcements with your access/);
   });
   it("falls back to an honest description of demo mode", () => {
     const p = plan("Write me a poem about elevators");

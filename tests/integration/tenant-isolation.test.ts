@@ -10,7 +10,7 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   // iteration 5: front desk & facility
   "visitors", "parking_spaces", "vehicles", "parking_permits", "parking_violations", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
   // iteration 6: AI assistant
-  "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage"];
+  "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
 
 let A: string; // Pacific Properties
@@ -59,7 +59,7 @@ describe("reads", () => {
   });
   it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents",
     "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
-    "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage"])("%s: no context sees nothing", async (table) => {
+    "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies"])("%s: no context sees nothing", async (table) => {
     await asApp({}, async (q) => {
       const { rows } = await q(`select count(*)::int as n from ${table}`);
       expect(rows[0].n).toBe(0);
@@ -88,6 +88,20 @@ describe("reads", () => {
     });
     const { rows } = await ownerPool.query(`select count(distinct user_id)::int n from ${table} where org_id = $1`, [A]);
     expect(rows[0].n).toBeGreaterThan(1);
+  });
+  it("assistant plans and policies can't be written into another organization", async () => {
+    // each statement in its own (rolled-back) transaction: a refused insert aborts the transaction it's in
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into ai_policies (org_id, action, mode) values ($1, 'task.create', 'auto')", [B])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into ai_approvals (org_id, turn_id, expires_at) values ($1, gen_random_uuid(), now())", [B])).rejects.toThrow(/row-level security/);
+    });
+    // and an org can't reach the other's rows to change them
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      expect((await q("update ai_approvals set status = 'rejected' where org_id = $1", [B])).rowCount).toBe(0);
+      expect((await q("delete from ai_policies where org_id = $1", [B])).rowCount).toBe(0);
+    });
   });
   it("outbox: org context enqueues only for itself; the worker's system context reads across orgs", async () => {
     await asApp({ orgId: A, userId: adminId }, async (q) => {

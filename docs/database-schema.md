@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–6)
+## Implemented (Iterations 1–7)
 
 ### Identity & auth (🌐)
 
@@ -134,8 +134,11 @@ Visitor check-in issues the parking permit in a savepoint, so "space just taken"
 |---|---|
 | `ai_conversations` | owner `user_id`, `title` (first question), `mode` property/maintenance/frontdesk/facility/resident, `last_message_at`, `archived_at` (soft delete from the history list) |
 | `ai_messages` | provider-neutral transcript: `turn_id` (correlation id of one question), `seq` (unique per conversation), `role` user/assistant/tool, `content`, assistant `tool_calls` jsonb `[{id, name, input}]`, tool `tool_call_id`/`tool_name`/`is_error`, `provider`/`model` of assistant messages. `user_id` is denormalised so RLS can restrict rows to their author |
-| `ai_tool_calls` | the action log: user, conversation, `turn_id`, provider `call_id`, `tool`, `risk_class` (1 = read in this iteration), validated `args`, `outcome` ok/denied/invalid/not_found/ambiguous/error/unknown_tool, error, `summary`, `result_count`, `display` jsonb (the record cards the UI showed), `duration_ms` |
+| `ai_tool_calls` | the action log: user, conversation, `turn_id`, provider `call_id` (`…:run` for the execution of an approved step), `tool`, `risk_class` 1–5, validated `args`, `outcome` ok/denied/invalid/not_found/ambiguous/error/unknown_tool/**pending/executed/policy_denied**, error, `summary`, `result_count`, `display` jsonb (the record cards the UI showed), `duration_ms`, **`approval_id`** → the plan (Iteration 7, indexed) |
 | `ai_usage` | one row per question (`turn_id` unique): provider, model, input/output/cached tokens, `model_calls`, `tool_calls`, `est_cost_usd` (null when the model has no price), `latency_ms`, `outcome` ok/error/timeout/step_limit/cap_reached/disabled. Indexed by `(org_id, created_at)` for the monthly cap |
+
+| `ai_approvals` (Iteration 7) | a **plan**: the changes prepared in one turn. `conversation_id` (set null on delete), `turn_id`, `requested_by_user_id`, `mode` confirm (a person approves) / auto (an org rule let a step run), `status` pending/executing/executed/partially_failed/failed/rejected/expired/superseded, `steps` jsonb `[{id, callId, tool, riskClass, policyKeys, propertyId, input, resolved, title, details, effects, draft?}]`, `results` jsonb `[{stepId, status, summary, record, verified, check, warning}]`, `decided_by_user_id`/`decided_at`, `executed_at`, `expires_at` (24 h). Indexed by `(org_id, requested_by_user_id, status, created_at)` and conversation |
+| `ai_policies` (Iteration 7) | what the assistant may do: `action` (a policy key such as `task.create`, `communication.send`), optional `property_id` (cascade), `mode` auto/confirm/deny, `updated_by_user_id`. Unique per org+action where `property_id` is null, and per org+property+action otherwise (partial unique indexes) |
 
 Organization settings gained `aiEnabled` and `aiMonthlyRequestCap` (in `organizations.settings`). Sensitive reads by the assistant (the resident directory) also write an `audit_logs` row `ai.sensitive_read` with `ai_generated = true`.
 
@@ -171,6 +174,7 @@ current_setting('app.pass_token_hash')                      (public guest-pass p
 | `notification_preferences` | own rows only |
 | `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
 | Front desk & facility tables (`visitors`, `parking_*`, `vehicles`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` — 10 tables, migration `0011`) | same rule as the community tables. **Plus** `visitor_pass`: with no org context, a transaction that sets `app.pass_token_hash` may SELECT exactly the visitor row with that hash (the public pass page); it then switches to that org to read the building's public details |
+| AI plans and policies (migration `0015`) | `ai_approvals`, `ai_policies`: the standard tenant rule (`org_id = app_org()`, platform admin / system read). Only the requester can see or decide a plan — enforced in the service (`requested_by_user_id = app user` on every query); policies are changed only by `ai.settings.manage` |
 | AI tables (migration `0013`) | `ai_conversations`, `ai_messages`: **owner only** — `org_id = app_org() AND user_id = app_user()` for read and write; no platform-admin or worker bypass. `ai_tool_calls`, `ai_usage`: the standard tenant rule (admins read them through `ai.settings.manage` in the service) |
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
 
@@ -180,7 +184,6 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 7 | `ai_approvals` (action plans awaiting approval), `ai_policies` (per-org/property AI action policy) |
 | 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |
 | 9 | `workflows`, `workflow_runs`, `reports`, `scheduled_jobs` |
 | 10 | `plans`, `subscriptions`, `invoices`, `usage_records`, `api_keys`, `webhooks`, `webhook_deliveries`, `integrations`, `feature_flags` |

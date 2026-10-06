@@ -12,6 +12,7 @@ import { pageArgs, scopeCondition, toPage, type Page } from "../scope";
 import { addTimeline, emit, listTimeline, nextNumber, type Visibility } from "../ops/core";
 import { closeDowntimeForWorkOrderTx, openDowntimeTx } from "../assets/service";
 import { onCallFor } from "../shifts/service";
+import { BRAND } from "@/config/brand";
 import {
   allowedTransitions, dueDates, evaluateTriage, isOpen, OPEN_STATUSES, PRIORITY_ORDER, slaFor, WO_CATEGORIES,
   type Priority, type TriageRule, type WoActor, type WoStatus,
@@ -220,6 +221,23 @@ async function assignOptions(tx: Tx, orgId: string, propertyId: string) {
   return { staff, vendors: vend };
 }
 
+/* ───────────── previews for the assistant (read-only) ───────────── */
+
+// who the principal may assign at a property: staff whose scope covers it and approved, active vendors
+export async function assignmentOptions(ctx: TenantCtx, propertyId: string) {
+  const p = ctx.principal;
+  authorize(p, "workorder.manage", { orgId: p.orgId, propertyId });
+  return tenantTx(ctx, (tx) => assignOptions(tx, p.orgId, propertyId));
+}
+
+// what the configured triage rules would do with a new request, without creating it
+export async function triagePreview(ctx: TenantCtx, input: { propertyId: string; title: string; description: string; category: string }) {
+  return tenantTx(ctx, async (tx) => {
+    const t = evaluateTriage(await loadTriageRules(tx, ctx.principal.orgId, input.propertyId), `${input.title} ${input.description}`, input.category, input.propertyId);
+    return { isEmergency: t.isEmergency, priority: t.priority, category: t.category, rules: t.matched.map((m) => m.name), instructions: t.instructions };
+  });
+}
+
 /* ───────────── create ───────────── */
 
 export const createWoSchema = z.object({
@@ -324,7 +342,8 @@ export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts
       triageRuleId: triage.matched[0]?.id ?? null, sourceType: opts.sourceType ?? null, sourceId: opts.sourceId ?? null,
       assetId: asset?.id ?? null,
     }).returning();
-    await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "created", toStatus: "new", visibility: "public", body: `Request #${number} submitted.` });
+    await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "created", toStatus: "new", visibility: "public",
+      body: ctx.ai ? `Request #${number} submitted with ${BRAND.assistantName}.` : `Request #${number} submitted.` });
     if (triage.matched.length) {
       await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "rule", visibility: "internal",
         body: `Triage rules applied: ${triage.matched.map((m) => m.name).join(", ")} → priority ${priority}${isEmergency ? ", emergency" : ""}.` });

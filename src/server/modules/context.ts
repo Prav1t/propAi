@@ -4,8 +4,9 @@ import type { Principal } from "../authz/authorize";
 import type { RequestMeta } from "../request-meta";
 import { writeAudit } from "../audit";
 
-// passed as the first argument to every tenant-scoped service function
-export type TenantCtx = { principal: Principal; meta: RequestMeta | null };
+// passed as the first argument to every tenant-scoped service function.
+// `ai` is set when the assistant performs the change on the principal's behalf (after approval or under a policy).
+export type TenantCtx = { principal: Principal; meta: RequestMeta | null; ai?: { approvalId: string | null } };
 
 // all tenant queries run inside this: RLS pins the transaction to the principal's org
 export function tenantTx<T>(ctx: TenantCtx, fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -28,7 +29,10 @@ export async function auditAs(
   tx: Tx, ctx: TenantCtx, action: string, entityType: string, entityId: string | null,
   before?: unknown, after?: unknown,
 ): Promise<void> {
-  await writeAudit(tx, { orgId: ctx.principal.orgId, actorUserId: ctx.principal.userId, action, entityType, entityId, before, after }, ctx.meta);
+  await writeAudit(tx, {
+    orgId: ctx.principal.orgId, actorUserId: ctx.principal.userId, action, entityType, entityId, before, after,
+    aiGenerated: !!ctx.ai, approvalId: ctx.ai?.approvalId ?? null,
+  }, ctx.meta);
 }
 
 // unique-constraint violations from Postgres (possibly wrapped by Drizzle)

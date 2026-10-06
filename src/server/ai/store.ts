@@ -7,6 +7,7 @@ import { tenantTx, type TenantCtx } from "../modules/context";
 import type { ChatMessage, ToolCall } from "./types";
 import type { ToolDisplay } from "./tools/registry";
 import type { AiMode } from "./modes";
+import { plansForConversation, type PlanView } from "./approvals";
 
 export type ConversationRow = typeof aiConversations.$inferSelect;
 
@@ -33,11 +34,17 @@ const MAX_REPLAY_CHARS = 6000;
 
 // the stored transcript → provider-neutral messages, with anything a provider would reject repaired:
 // tool calls without results (an interrupted turn) are dropped, as are results without their call
-export function toChatHistory(rows: (typeof aiMessages.$inferSelect)[]): ChatMessage[] {
+// notes (keyed by turn) are appended to that turn's last assistant message: how a prepared plan was decided since
+export function toChatHistory(rows: (typeof aiMessages.$inferSelect)[], notes?: Map<string, string>): ChatMessage[] {
   const out: ChatMessage[] = [];
+  const turnOf: string[] = [];
+  const push = (msg: ChatMessage, turnId: string) => {
+    out.push(msg);
+    turnOf.push(turnId);
+  };
   for (let i = 0; i < rows.length; i++) {
     const m = rows[i];
-    if (m.role === "user") out.push({ role: "user", content: m.content });
+    if (m.role === "user") push({ role: "user", content: m.content }, m.turnId);
     else if (m.role === "assistant") {
       const calls = (m.toolCalls as ToolCall[] | null) ?? [];
       const results: ChatMessage[] = [];
@@ -52,12 +59,24 @@ export function toChatHistory(rows: (typeof aiMessages.$inferSelect)[]): ChatMes
       }
       const answered = calls.filter((c) => results.some((r) => r.role === "tool" && r.toolCallId === c.id));
       if (answered.length !== calls.length) {
-        if (m.content.trim()) out.push({ role: "assistant", content: m.content });
+        if (m.content.trim()) push({ role: "assistant", content: m.content }, m.turnId);
       } else {
-        if (m.content.trim() || calls.length) out.push({ role: "assistant", content: m.content, ...(calls.length ? { toolCalls: calls } : {}) });
-        if (calls.length) out.push(...results);
+        if (m.content.trim() || calls.length) push({ role: "assistant", content: m.content, ...(calls.length ? { toolCalls: calls } : {}) }, m.turnId);
+        if (calls.length) for (const r of results) push(r, m.turnId);
       }
       i = j - 1;
+    }
+  }
+  if (notes?.size) {
+    for (const [turnId, note] of notes) {
+      const at = out.findLastIndex((msg, k) => turnOf[k] === turnId);
+      if (at < 0) continue;
+      const last = out[at];
+      if (last.role === "assistant") out[at] = { ...last, content: last.content ? `${last.content}\n\n${note}` : note };
+      else {
+        out.splice(at + 1, 0, { role: "assistant", content: note });
+        turnOf.splice(at + 1, 0, turnId);
+      }
     }
   }
   // a replayed history must start with the user
@@ -65,9 +84,9 @@ export function toChatHistory(rows: (typeof aiMessages.$inferSelect)[]): ChatMes
   return out;
 }
 
-export async function historyForModel(tx: Tx, conversationId: string, maxMessages = 40): Promise<ChatMessage[]> {
+export async function historyForModel(tx: Tx, conversationId: string, maxMessages = 40, notes?: Map<string, string>): Promise<ChatMessage[]> {
   const rows = await tx.select().from(aiMessages).where(eq(aiMessages.conversationId, conversationId)).orderBy(desc(aiMessages.seq)).limit(maxMessages);
-  return toChatHistory(rows.reverse());
+  return toChatHistory(rows.reverse(), notes);
 }
 
 /* ───────────── reading for the UI ───────────── */
@@ -90,6 +109,7 @@ export type TurnView = {
   provider: string | null;
   model: string | null;
   outcome: string | null; // from ai_usage: ok | error | timeout | step_limit | cap_reached | disabled
+  plan: PlanView | null; // changes prepared in this turn, waiting for (or after) the user's decision
 };
 
 export async function getConversationView(ctx: TenantCtx, id: string): Promise<{ conversation: ConversationRow; turns: TurnView[] }> {
@@ -106,7 +126,7 @@ export async function getConversationView(ctx: TenantCtx, id: string): Promise<{
     const turns: TurnView[] = [];
     for (const m of msgs) {
       if (m.role === "user") {
-        turns.push({ turnId: m.turnId, question: m.content, askedAt: m.createdAt, steps: [], answer: "", provider: null, model: null, outcome: usage.find((u) => u.turnId === m.turnId)?.outcome ?? null });
+        turns.push({ turnId: m.turnId, question: m.content, askedAt: m.createdAt, steps: [], answer: "", provider: null, model: null, outcome: usage.find((u) => u.turnId === m.turnId)?.outcome ?? null, plan: null });
         continue;
       }
       const t = turns.findLast((x) => x.turnId === m.turnId);
@@ -116,9 +136,13 @@ export async function getConversationView(ctx: TenantCtx, id: string): Promise<{
       t.model = m.model ?? t.model;
     }
     for (const c of calls) {
+      // execution rows of an approved plan are shown on the plan card, not in the trail
+      if (c.callId.endsWith(":run")) continue;
       const t = turns.find((x) => x.turnId === c.turnId);
       t?.steps.push({ callId: c.callId, tool: c.tool, outcome: c.outcome, summary: c.summary, display: (c.display as ToolDisplay | null) ?? null });
     }
+    const plans = await plansForConversation(tx, ctx, id);
+    for (const t of turns) t.plan = plans.get(t.turnId) ?? null;
     return { conversation, turns };
   });
 }
