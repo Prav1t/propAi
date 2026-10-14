@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–7)
+## Implemented (Iterations 1–8)
 
 ### Identity & auth (🌐)
 
@@ -140,6 +140,17 @@ Visitor check-in issues the parking permit in a savepoint, so "space just taken"
 | `ai_approvals` (Iteration 7) | a **plan**: the changes prepared in one turn. `conversation_id` (set null on delete), `turn_id`, `requested_by_user_id`, `mode` confirm (a person approves) / auto (an org rule let a step run), `status` pending/executing/executed/partially_failed/failed/rejected/expired/superseded, `steps` jsonb `[{id, callId, tool, riskClass, policyKeys, propertyId, input, resolved, title, details, effects, draft?}]`, `results` jsonb `[{stepId, status, summary, record, verified, check, warning}]`, `decided_by_user_id`/`decided_at`, `executed_at`, `expires_at` (24 h). Indexed by `(org_id, requested_by_user_id, status, created_at)` and conversation |
 | `ai_policies` (Iteration 7) | what the assistant may do: `action` (a policy key such as `task.create`, `communication.send`), optional `property_id` (cascade), `mode` auto/confirm/deny, `updated_by_user_id`. Unique per org+action where `property_id` is null, and per org+property+action otherwise (partial unique indexes) |
 
+### Knowledge base & retrieval (🔒, Iteration 8)
+
+| Table | Purpose / key columns |
+|---|---|
+| `knowledge_entries` | what admins teach the assistant in their own words: optional `property_id` (cascade) / `building_id`, `title`, `body` (light markdown; `##` headings become citable sections), `category` (rules, amenities, procedures, emergency, maintenance, moving, parking, policy, general), `audience` staff / residents / owners, `status` active / disabled, current `version`, created/updated by |
+| `knowledge_entry_versions` | every saved version (title, body, category, audience, change note, author); unique per entry + version |
+| `kb_sources` | one row per indexable source — a document **or** an entry (check constraint), unique per document and per entry (partial unique indexes). It *is* the indexing queue: `status` queued / indexing / indexed / failed / unsupported / empty, the `version` to index and the `indexed_version`, `chunk_count`, `char_count`, `embedding_model`, `error`, `attempts`, queued/started/indexed timestamps. Indexed by `(status, queued_at)` for the worker |
+| `kb_chunks` | passages, the unit of retrieval and citation: source, document or entry, `version`, `ordinal`, `context` ("Title › Section"), `heading`, `page`, `content`, `token_count`, `embedding vector(512)`, `embedding_model`. Migration `0017` adds a generated, weighted `search tsvector` (English: context A, content B) with a GIN index, and an **HNSW** index on `embedding` (cosine) |
+
+Requires the **pgvector** extension (migration `0016` runs `CREATE EXTENSION IF NOT EXISTS vector`). Embeddings are fixed at 512 dimensions; every provider is asked for (or checked against) that size.
+
 Organization settings gained `aiEnabled` and `aiMonthlyRequestCap` (in `organizations.settings`). Sensitive reads by the assistant (the resident directory) also write an `audit_logs` row `ai.sensitive_read` with `ai_generated = true`.
 
 ### Full-text search
@@ -174,6 +185,7 @@ current_setting('app.pass_token_hash')                      (public guest-pass p
 | `notification_preferences` | own rows only |
 | `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
 | Front desk & facility tables (`visitors`, `parking_*`, `vehicles`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` — 10 tables, migration `0011`) | same rule as the community tables. **Plus** `visitor_pass`: with no org context, a transaction that sets `app.pass_token_hash` may SELECT exactly the visitor row with that hash (the public pass page); it then switches to that org to read the building's public details |
+| Knowledge base (migration `0017`) | `knowledge_entries`, `knowledge_entry_versions`, `kb_sources`, `kb_chunks`: the standard tenant rule (`org_id = app_org()`; platform admin / worker system read; writes only in org context). Who may read a passage inside the org (audience, place, active, current version) is applied in SQL by the retrieval service before ranking, using the same rule as the Documents page |
 | AI plans and policies (migration `0015`) | `ai_approvals`, `ai_policies`: the standard tenant rule (`org_id = app_org()`, platform admin / system read). Only the requester can see or decide a plan — enforced in the service (`requested_by_user_id = app user` on every query); policies are changed only by `ai.settings.manage` |
 | AI tables (migration `0013`) | `ai_conversations`, `ai_messages`: **owner only** — `org_id = app_org() AND user_id = app_user()` for read and write; no platform-admin or worker bypass. `ai_tool_calls`, `ai_usage`: the standard tenant rule (admins read them through `ai.settings.manage` in the service) |
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
@@ -184,7 +196,6 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 8 | `document_chunks` (pgvector `embedding`, HNSW index), `knowledge_items` |
 | 9 | `workflows`, `workflow_runs`, `reports`, `scheduled_jobs` |
 | 10 | `plans`, `subscriptions`, `invoices`, `usage_records`, `api_keys`, `webhooks`, `webhook_deliveries`, `integrations`, `feature_flags` |
 | later | `storage_lockers` (not built in Iteration 5) |

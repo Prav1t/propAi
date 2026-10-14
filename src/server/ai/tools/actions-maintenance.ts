@@ -7,6 +7,7 @@ import {
 } from "../../modules/maintenance/service";
 import { isOpen, PRIORITY_ORDER, WO_CATEGORIES } from "../../modules/maintenance/rules";
 import { WO_CATEGORY } from "@/lib/ops-labels";
+import { policyLine } from "../../kb/retrieve";
 import { defineAction, err, type ToolErr } from "./registry";
 import { isToolErr, locationArg, pickByName, placeFilter } from "./common";
 import { isErr, myUnits, propertyFor, resolveUnit } from "./resolve";
@@ -94,6 +95,8 @@ export const createWorkOrderAction = defineAction({
     const emergency = !!a.emergency || triage.isEmergency;
     const priority = emergency ? "urgent" : (!resident && a.priority) || triage.priority || "normal";
     const category = triage.category && (a.category ?? "general") === "general" ? triage.category : a.category ?? "general";
+    // an emergency shows the organization's own procedure for it, when one is on file
+    const procedure = emergency ? await policyLine(ctx, `${WO_CATEGORY[category] ?? category} emergency procedure`, loc.propertyId) : null;
     const input: CreateWoInput = {
       title: a.title, description, category: category as CreateWoInput["category"], priority: resident ? null : (a.priority ?? null), isEmergency: !!a.emergency,
       unitId: loc.unitId, buildingId: loc.buildingId, propertyId: loc.propertyId, unitNumber: null, area: a.area ?? null, permissionToEnter: false, entryNotes: null,
@@ -107,6 +110,7 @@ export const createWorkOrderAction = defineAction({
           `${WO_CATEGORY[category] ?? category} · priority ${priority}${emergency ? " · emergency" : ""}`,
           ...(triage.rules.length ? [`Triage rules that will apply: ${triage.rules.join(", ")}`] : []),
           ...(description ? [description.length > 220 ? `${description.slice(0, 217)}…` : description] : []),
+          ...(procedure ? [procedure.replace(/^Policy:/, "Procedure on file:")] : []),
         ],
         effects: [
           "The property's managers are notified",

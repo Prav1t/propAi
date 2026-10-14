@@ -65,6 +65,9 @@ export function extractTopic(text: string): string | undefined {
 
 const MUTATION = /(?:^|[.!?]\s+)(?:(?:hey|hi|ok|okay)[, ]+)?(?:(?:can|could|would|will) you\s+|please\s+|i(?:'d| would) like to\s+|i (?:want|need) to\s+|go ahead and\s+|let'?s\s+)?(create|open a|log|file|submit|raise|book|reserve|cancel|send|notify|message|email|text|tell(?!\s+me\b)|announce|post|assign|reassign|dispatch|schedule|reschedule|add|register|invite|delete|remove|update|change|close|resolve|mark|approve|reject|deny|check (?:in|out))\b/i;
 
+// questions answered from documents and the knowledge base rather than records
+const KNOWLEDGE = /\b(rules?|polic(y|ies)|bylaws?|procedures?|guidelines?|allowed|permitted|prohibited|can i|may i|am i allowed|are we allowed|what (do|should) (i|we) do|how do (i|we)|what happens if|deposits?|quiet hours|pets?|dogs?|cats?|smok\w*|barbecues?|bbqs?|move[- ]?(in|out)|moving|garbage|recycl\w*|organics|insurance|muster|evacuat\w*|fire (safety|plan|drill|alarm)|shut[- ]?off|after[- ]hours|agm|minutes|resolutions?|privacy|personal information|tenancy|lease)\b/;
+
 // questions are answered by looking things up; requests to change something are prepared as plans
 const QUESTION = /^(?:(?:hey|hi|ok|okay)[, ]+)?(who|what|which|when|where|why|how|is|are|was|were|do|does|did|has|have|any|show|list|find|search|look up|summari[sz]e|give me|tell me|get me|count)\b/i;
 
@@ -131,6 +134,17 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
     if (/^check (in|out)$/.test(verb)) return { kind: "reply", text: notFromChat(h, "check visitors in or out", "/visitors", "Visitors") };
     if (/^(delete|remove)$/.test(verb)) return { kind: "reply", text: "I don't delete records. Open the record to archive or cancel it, or ask me to cancel a specific request or booking." };
     return { kind: "reply", text: `I didn't catch which change you want. ${capabilities(h, available)}` };
+  }
+
+  // rules, policies and procedures are answered from the organization's documents, with citations
+  if (has("search_documents") && /\b(list|show|find)\b.*\bdocuments?\b/.test(t)) {
+    const category = (["bylaws", "rules", "policy", "minutes", "notice", "insurance", "manual", "lease", "form", "financial"] as const).find((c) => new RegExp(`\\b${c}`).test(t));
+    return tools([{ name: "search_documents", input: { ...(category ? { category } : {}), ...loc } }]);
+  }
+  // (questions about people — numbers, emails, who lives where — go to the directory rules further down, not documents)
+  if (KNOWLEDGE.test(t) && !/\b(emergency (number|contact|phone)|office hours|phone|email|who lives|contact details)\b/.test(t)) {
+    if (!has("search_knowledge")) return { kind: "reply", text: refusal("your organization's documents") };
+    return tools([{ name: "search_knowledge", input: { question: text, ...(location && !h.resident ? { location } : {}) } }]);
   }
 
   const woNumber = text.match(/\b(?:wo|work\s*order|request|ticket|job)\s*(?:#|no\.?|number)?\s*-?\s*(\d{1,7})\b/i);
@@ -273,6 +287,10 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
 
   if (/^(hi|hello|hey|good (morning|afternoon|evening)|thanks|thank you)\b/.test(t) && t.length < 40) {
     return { kind: "reply", text: /^thank/.test(t) ? "You're welcome." : `Hello! ${capabilities(h, available)}` };
+  }
+  // any other question: look in the organization's documents before admitting the demo can't parse it
+  if ((QUESTION.test(text) || /\?\s*$/.test(text)) && has("search_knowledge")) {
+    return tools([{ name: "search_knowledge", input: { question: text, ...(location && !h.resident ? { location } : {}) } }]);
   }
   return { kind: "reply", text: `I'm running in demo mode without a language model, so I only understand a fixed set of questions. ${capabilities(h, available)}` };
 }

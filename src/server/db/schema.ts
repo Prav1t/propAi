@@ -14,6 +14,7 @@ import {
   uuid,
   date,
   numeric,
+  vector,
 } from "drizzle-orm/pg-core";
 
 // shared column helpers
@@ -1698,5 +1699,116 @@ export const aiPolicies = pgTable(
     uniqueIndex("ai_policies_org_uq").on(t.orgId, t.action).where(sql`${t.propertyId} is null`),
     uniqueIndex("ai_policies_property_uq").on(t.orgId, t.propertyId, t.action).where(sql`${t.propertyId} is not null`),
     check("ai_policies_mode_ck", sql`${t.mode} in ('auto','confirm','deny')`),
+  ],
+);
+
+/* ───────────────────────── Knowledge base & retrieval (Iteration 8) ───────────────────────── */
+
+export const KNOWLEDGE_CATEGORIES = ["rules", "amenities", "procedures", "emergency", "maintenance", "moving", "parking", "policy", "general"] as const;
+export const KB_INDEX_STATUSES = ["queued", "indexing", "indexed", "failed", "unsupported", "empty"] as const;
+export const EMBEDDING_DIMENSIONS = 512; // fixed by the vector column; providers are asked for this size
+
+// what admins teach the assistant in their own words ("our after-hours flood procedure is …"); versioned like documents
+export const knowledgeEntries = pgTable(
+  "knowledge_entries",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }), // null = whole organization
+    buildingId: uuid("building_id").references(() => buildings.id, { onDelete: "set null" }),
+    title: text("title").notNull(),
+    body: text("body").notNull(), // plain text / light markdown; "## headings" become citable sections
+    category: text("category").notNull().default("general"),
+    audience: text("audience").notNull().default("residents"), // staff | residents (staff + residents) | owners (staff + owners)
+    status: text("status").notNull().default("active"),
+    version: integer("version").notNull().default(1),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("knowledge_entries_org_idx").on(t.orgId, t.status, t.category),
+    check("knowledge_entries_audience_ck", sql`${t.audience} in ('staff','residents','owners')`),
+    check("knowledge_entries_status_ck", sql`${t.status} in ('active','disabled')`),
+  ],
+);
+
+export const knowledgeEntryVersions = pgTable(
+  "knowledge_entry_versions",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    entryId: uuid("entry_id").notNull().references(() => knowledgeEntries.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    category: text("category").notNull(),
+    audience: text("audience").notNull(),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("knowledge_entry_versions_uq").on(t.entryId, t.version)],
+);
+
+// one row per indexable source (a document or a knowledge entry): the indexing queue and its status
+export const kbSources = pgTable(
+  "kb_sources",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    sourceType: text("source_type").notNull(), // document | knowledge
+    documentId: uuid("document_id").references(() => documents.id, { onDelete: "cascade" }),
+    entryId: uuid("entry_id").references(() => knowledgeEntries.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("queued"),
+    version: integer("version").notNull(), // the version to index (current when queued)
+    indexedVersion: integer("indexed_version"),
+    chunkCount: integer("chunk_count").notNull().default(0),
+    charCount: integer("char_count").notNull().default(0),
+    embeddingModel: text("embedding_model"),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    queuedAt: ts("queued_at").notNull().defaultNow(),
+    startedAt: ts("started_at"),
+    indexedAt: ts("indexed_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("kb_sources_document_uq").on(t.documentId).where(sql`${t.documentId} is not null`),
+    uniqueIndex("kb_sources_entry_uq").on(t.entryId).where(sql`${t.entryId} is not null`),
+    index("kb_sources_queue_idx").on(t.status, t.queuedAt),
+    index("kb_sources_org_idx").on(t.orgId, t.status),
+    check("kb_sources_type_ck", sql`(${t.sourceType} = 'document' and ${t.documentId} is not null and ${t.entryId} is null) or (${t.sourceType} = 'knowledge' and ${t.entryId} is not null and ${t.documentId} is null)`),
+    check("kb_sources_status_ck", sql`${t.status} in ('queued','indexing','indexed','failed','unsupported','empty')`),
+  ],
+);
+
+// passages: the unit of retrieval and citation. A full-text `search` column and the HNSW index are added in migration 0017.
+export const kbChunks = pgTable(
+  "kb_chunks",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    sourceId: uuid("source_id").notNull().references(() => kbSources.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id").references(() => documents.id, { onDelete: "cascade" }),
+    entryId: uuid("entry_id").references(() => knowledgeEntries.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    context: text("context").notNull(), // "Title › Section" — searched with the content and shown in citations
+    heading: text("heading"),
+    page: integer("page"),
+    content: text("content").notNull(),
+    tokenCount: integer("token_count").notNull().default(0),
+    embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }),
+    embeddingModel: text("embedding_model"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("kb_chunks_source_idx").on(t.sourceId, t.ordinal),
+    index("kb_chunks_document_idx").on(t.documentId),
+    index("kb_chunks_entry_idx").on(t.entryId),
+    index("kb_chunks_org_idx").on(t.orgId),
   ],
 );

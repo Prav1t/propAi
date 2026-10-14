@@ -37,6 +37,7 @@ export const NAV: NavSection[] = [
       { label: "Announcements", href: (s) => `/o/${s}/announcements`, anyOf: ["announcement.read", "announcement.manage"], icon: "megaphone", badgeKey: "announcements" },
       { label: "Messages", href: (s) => `/o/${s}/messages`, anyOf: ["message.manage"], residentsAlso: ["message.use"], icon: "message", badgeKey: "messages" },
       { label: "Documents", href: (s) => `/o/${s}/documents`, anyOf: ["document.read", "document.manage"], icon: "file" },
+      { label: "Knowledge base", href: (s) => `/o/${s}/knowledge`, anyOf: ["knowledge.manage"], icon: "book" },
     ],
   },
   {

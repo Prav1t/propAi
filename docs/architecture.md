@@ -1,6 +1,6 @@
 # Architecture
 
-_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 6). Sections marked **(planned)** are not implemented yet._
+_Iteration 0 design, updated each iteration with what is actually built (last: Iteration 8). Sections marked **(planned)** are not implemented yet._
 
 ## 1. Decisions at a glance
 
@@ -10,7 +10,7 @@ _Iteration 0 design, updated each iteration with what is actually built (last: I
 | Web framework | **Next.js 16 (App Router) + React 19 + TypeScript** | Server Components for data-heavy screens, Server Actions for forms, Route Handlers for the public REST API |
 | Styling | **Tailwind CSS v4** + in-house component library in `src/components/ui` | No generic dashboard kit; consistent, accessible primitives |
 | Forms | Server Actions + `useActionState` + **Zod** (shared schemas) | Progressive enhancement, one validation source. React Hook Form / TanStack Query are introduced where client-heavy interaction needs them (AI chat, calendars) |
-| Database | **PostgreSQL 16** (+ **pgvector** from Iteration 8) | Relational core, RLS, JSONB, full-text search, vectors in one engine |
+| Database | **PostgreSQL 16** + **pgvector** (required from Iteration 8) | Relational core, RLS, JSONB, full-text search, vectors in one engine |
 | ORM / migrations | **Drizzle ORM** + drizzle-kit SQL migrations | Pure TypeScript (no engine binaries), SQL-transparent, first-class raw SQL for RLS, FTS and pgvector. Chosen over Prisma for RLS/`set_config` ergonomics and zero native-binary downloads |
 | Auth | Session-cookie auth built on vetted primitives: **argon2id** (`@node-rs/argon2`), CSPRNG tokens, SHA-256 token hashing, **TOTP** via `otplib`, AES-256-GCM for MFA secrets | Follows the OWASP session-management and Lucia-style guidance; no home-made crypto. OAuth/SSO adapters slot in beside the password provider (Iteration 11) |
 | Jobs / events | Transactional **outbox table** + worker; queue = **pg-boss** (Postgres) first, Redis/BullMQ if throughput requires **(planned, Iteration 9)** | Keeps ops to one datastore early; outbox guarantees events are never lost on commit |
@@ -34,11 +34,12 @@ _Iteration 0 design, updated each iteration with what is actually built (last: I
                                ├─ modules/*       domain services (org, property, …)
                                ├─ audit/          audit log writer
                                ├─ mail/           Mailer adapters
-                               └─ ai/             providers, tool registry, orchestrator, usage/caps, eval
+                               ├─ ai/             providers, tool registry, orchestrator, policies, approvals, eval
+                               └─ kb/             extraction, chunking, embeddings, indexing queue, retrieval
                                       │
                       ┌───────────────┼──────────────────┐
                  PostgreSQL 16     Object storage     SMTP / providers
-              (RLS, FTS, pgvector)   (planned)        (LLM, SMS, Stripe…)
+              (RLS, FTS, pgvector)  (local disk / S3)   (LLM, embeddings, SMS…)
 ```
 
 ### Module boundaries
@@ -72,7 +73,7 @@ See `database-schema.md` for tables. Key rules:
 | Service | Every service function takes `TenantContext`; queries filter by `ctx.orgId` |
 | Database | **Row-Level Security** on all tenant tables. The app connects as a non-owner role (`propai_app`) with no `BYPASSRLS`. Policies compare `org_id` to `current_setting('app.org_id')`, which `withTenant()` sets per transaction with `set_config(…, true)` (transaction-local, safe with pooling) |
 | Tests | Integration tests connect as the app role and prove: org A context cannot read, update or delete org B rows even with raw SQL; cross-org IDs in service calls return not-found |
-| Search / AI / files | (planned) all go through the same tenant-scoped services; vector search filters on `org_id` under RLS |
+| Search / AI / files | all go through the same tenant-scoped services. Retrieval passages (`kb_chunks`) are under RLS and filtered by the reader's audience and place before ranking; files are re-authorized on every download |
 
 Migrations and seeds run as the owner role (bypasses RLS as table owner). The runtime app never holds owner credentials.
 
@@ -173,6 +174,7 @@ service (one transaction)                 worker (system context)
   - **Package reminders:** one reminder per package waiting `PACKAGE_REMINDER_DAYS` (default 3; perishables after 1 day).
   - **Preventive maintenance:** opens a work order for each schedule whose lead window has started (in the property's time zone), assigns the schedule's vendor/staff if still valid, and moves `next_due_on` on. Missed occurrences are skipped (one work order for the latest, never a backlog); the schedule row is locked with `FOR UPDATE SKIP LOCKED`, so concurrent workers can't double-generate.
   - `npm run worker -- --once` runs a single tick for cron-style schedulers.
+- **Indexing queue (Iteration 8):** documents and knowledge entries mark their `kb_sources` row queued in the same transaction as the change; the request's `after()` hook and the worker tick both run `processIndexQueue()` (claims with `FOR UPDATE SKIP LOCKED`, three attempts, stale claims recovered after 10 minutes). Extraction and embedding run outside any transaction; passages are swapped in one transaction.
 - **Next:** the workflow engine (Iteration 9), webhooks (10) and AI insights subscribe to the same outbox.
 
 ## 9. File storage (Iteration 3)
@@ -210,6 +212,7 @@ service (one transaction)                 worker (system context)
 - **Actions (Iteration 7):** action tools `prepare` a step (resolve references, dry-run the real rules, no writes); the policy engine decides per step and property whether it runs now (`auto`, class 2 only), waits in the turn's **plan** (`ai_approvals`) or is refused. Approve / Edit / Cancel are server actions on the plan card; approving re-authorizes and executes each step through the same services as the UI with `TenantCtx.ai = { approvalId }`, verifies by re-reading, stops at the first failure, and drains the outbox so notifications go out. The orchestrator checks the per-user rate limit and the organization's enable switch and monthly cap, stores the question, then loops model ↔ tools (step limit, timeout, one retry on overload) and writes the transcript, every tool call and a usage row.
 - **Tools** (`src/server/ai/tools/*`) are thin adapters over the module services, typed with Zod and converted to JSON Schema for providers. Free-text references (a property, building, unit, amenity or vendor name) are resolved only among records the user can see; several matches come back as `AMBIGUOUS` with options, so the assistant asks. Results carry a factual summary, compact items with links, and separately a *display* (record cards, metrics) that the UI renders from the data — never from model text.
 - **Providers:** fetch-based adapters for the Anthropic Messages API and Chat Completions (OpenAI and compatible servers), both streamed; selection by environment. Without a key the **demo model** plans tool calls with fixed rules and answers from tool results, and every answer is labelled.
+- **Knowledge (Iteration 8):** `src/server/kb/*` indexes documents and knowledge-base entries into passages (extract → heading-aware chunks → embeddings through an `EmbeddingModel` adapter: Voyage, OpenAI, OpenAI-compatible, or a local hashing embedder without a key). `searchKnowledge()` filters passages by organization, audience, place, active status and current version in SQL, then fuses vector and full-text rankings; the `search_knowledge` / `retrieve_policy` tools return passages with citation links. Admins manage entries, see index status and test questions on *Knowledge base* (`knowledge.manage`).
 - **UI:** the *Assistant* page (history, modes, suggestions, streamed answer with a lookup trail and record cards, safe markdown with in-app links only), Cmd/Ctrl-K "Ask …", and an ask box on the dashboards. See `ai-architecture.md`.
 
 ## 10. Integrations (planned, Iteration 10)

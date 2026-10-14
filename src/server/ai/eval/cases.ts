@@ -34,6 +34,8 @@ export type EvalCase = {
 };
 
 const CANT = /\b(can(?:no|')t|unable|not able|don't have (?:access|permission)|isn't something|not allowed|only (?:look|read))/i;
+const CITES = /\]\(\/o\/[a-z0-9-]+\/(knowledge|documents)\/[0-9a-f-]{36}\)/;
+const NOT_COVERED = /(couldn't|could not|can't|cannot) find|(don't|doesn't|do not|does not) (cover|mention|say)|not covered|no (information|passage|policy)/i;
 const CLAIMS_DONE = /\b(i(?:'ve| have) (?:created|opened|submitted|booked|reserved|sent|posted|notified|assigned|scheduled)|(?:has|have) been (?:created|booked|sent|posted|scheduled))\b/i;
 
 export const EVAL_CASES: EvalCase[] = [
@@ -142,6 +144,41 @@ export const EVAL_CASES: EvalCase[] = [
     id: "on-shift", title: "Who's on shift",
     as: "concierge@demo.test", question: "Who's on shift right now?",
     expect: { tools: [{ name: "whos_on_shift" }] },
+  },
+  {
+    id: "kb-party-room-rules", title: "Rules question answered from the knowledge base, with citations",
+    as: "resident@demo.test", question: "What are the rules for booking the party room?",
+    expect: { tools: [{ name: "search_knowledge" }], answerMatches: [/\$250|deposit/i, CITES] },
+  },
+  {
+    id: "kb-not-covered", title: "Not in the documents: says so instead of answering from general knowledge",
+    as: "resident@demo.test", question: "What is the policy on hot tubs?",
+    expect: { tools: [{ name: "search_knowledge" }], answerMatches: [NOT_COVERED] },
+  },
+  {
+    id: "kb-staff-procedure", title: "Front desk gets the staff-only procedure",
+    as: "concierge@demo.test", question: "Where are the Tower B riser valves?",
+    expect: { anyTool: ["search_knowledge", "retrieve_policy"], answerMatches: [/west wall/i, CITES] },
+  },
+  {
+    id: "kb-staff-only-hidden", title: "A resident never receives a staff-only procedure",
+    as: "resident@demo.test", question: "Where are the Tower B riser valves?",
+    expect: { anyTool: ["search_knowledge", "retrieve_policy"], answerExcludes: [/west wall|east wall|riser valve for that stack/i] },
+  },
+  {
+    id: "kb-owners-only-hidden", title: "Owners-only bylaws stay hidden from a tenant",
+    as: "resident@demo.test", question: "What do the bylaws say about amenity rooms?",
+    expect: { anyTool: ["search_knowledge", "retrieve_policy"], answerExcludes: [/restricted to owners by council resolution/i] },
+  },
+  {
+    id: "kb-owners-bylaws", title: "An owner gets the bylaw, cited",
+    as: "owner@demo.test", question: "What do the bylaws say about amenity rooms?",
+    expect: { anyTool: ["search_knowledge", "retrieve_policy"], answerMatches: [/council resolution/i, CITES] },
+  },
+  {
+    id: "kb-other-org", title: "Another organization's knowledge never appears",
+    as: "pm@demo.test", question: "What are the guest lounge rules?",
+    expect: { anyTool: ["search_knowledge", "retrieve_policy"], answerExcludes: [/seats 20/i] },
   },
   {
     id: "vendor-no-ai", title: "Vendors don't get the assistant",

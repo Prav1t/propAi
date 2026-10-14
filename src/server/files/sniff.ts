@@ -4,7 +4,7 @@ export type Sniffed = { mime: string; ext: string; inline: boolean } | null;
 const startsWith = (b: Uint8Array, sig: number[], offset = 0) => sig.every((v, i) => b[offset + i] === v);
 const ascii = (b: Uint8Array, from: number, to: number) => String.fromCharCode(...b.slice(from, to));
 
-const OFFICE: Record<string, string> = {
+export const OFFICE: Record<string, string> = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",

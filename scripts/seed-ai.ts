@@ -61,7 +61,7 @@ export async function seedAi(): Promise<{ conversations: number; toolCalls: numb
 
     await ask("pm@demo.test", "pacific-properties", ["Show me all overdue maintenance requests across my properties", "Which vendor has been the slowest this month?"]);
     await ask("facility@demo.test", "pacific-properties", ["Find recurring equipment problems"]);
-    await ask("resident@demo.test", "pacific-properties", ["Do I have any packages?"]);
+    await ask("resident@demo.test", "pacific-properties", ["Do I have any packages?", "What are the rules for booking the party room?"]);
     await ask("admin@northshore.test", "northshore-strata", ["Summarize today's incidents"]);
   } finally {
     setChatModelForTests(undefined);

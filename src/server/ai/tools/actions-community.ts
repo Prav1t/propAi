@@ -14,6 +14,7 @@ import { listResidents } from "../../modules/people/service";
 import { ANNOUNCEMENT_CATEGORIES, PACKAGE_SIZES, VISITOR_KINDS } from "../../db/schema";
 import { money } from "@/lib/community-labels";
 import { addDaysIso } from "../demo/dates";
+import { policyLine } from "../../kb/retrieve";
 import { defineAction, err, plural } from "./registry";
 import { dateArg, dayEnd, dayStart, fmtDay, label, locationArg, placeFilter } from "./common";
 import { buildingFor, isErr, myUnits, propertyFor, resolveAmenity, resolveUnit } from "./resolve";
@@ -75,7 +76,7 @@ export const createBookingAction = defineAction({
     const duration = a.durationMinutes ?? Math.min(Math.max(60, info.amenity.minDurationMinutes), info.amenity.maxDurationMinutes);
     const input: BookingInput = {
       amenityId: am.id, date: a.date, start: hhmm(a.start), durationMinutes: duration, guests: a.guests ?? 1, purpose: a.purpose ?? null,
-      unitId, unitNumber: p.role.category === "resident" ? null : a.unit ?? null, buildingId: null,
+      unitId, unitNumber: p.role.category === "resident" ? null : a.unit ?? null, buildingId: p.role.category === "resident" ? null : pf.buildingId ?? null,
     };
     let pv: Awaited<ReturnType<typeof previewBooking>>;
     try {
@@ -86,6 +87,7 @@ export const createBookingAction = defineAction({
     const d = pv.decision;
     const when = `${fmtDay(a.date, env)}, ${time(pv.start, pv.tz)}–${time(pv.end, pv.tz)}`;
     if (!d.ok) return err("INVALID", `${am.name} can't be booked ${when}: ${d.problems.map((x) => x.message).join(" ")}`);
+    const policy = await policyLine(ctx, `${am.name} booking`, am.propertyId);
     return {
       ok: true,
       step: {
@@ -94,6 +96,7 @@ export const createBookingAction = defineAction({
           am.label, ...(unitLabel ? [unitLabel] : a.unit ? [`For unit ${a.unit}`] : []), `${plural(input.guests, "person", "people")}`,
           d.status === "requested" ? "Needs management approval after it's submitted" : "Confirmed as soon as it's booked",
           ...(d.feeCents ? [`Fee ${money(d.feeCents)} due`] : []), ...(d.depositCents ? [`Deposit ${money(d.depositCents)} due`] : []),
+          ...(policy ? [policy] : []),
         ],
         effects: d.status === "requested" ? ["Management is asked to approve it"] : [],
         resolved: { input },

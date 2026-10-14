@@ -19,6 +19,7 @@ export type ToolOk = {
   highlights?: string[]; // ready-to-read lines (markdown links allowed) — the demo model answers with these
   note?: string;
   status?: "awaiting_approval" | "executed"; // action tools only
+  cite?: boolean; // knowledge tools: the answer must quote/cite these passages
   record?: { ref: string; title: string; href: string }; // action tools: what was created or changed
 };
 export type ToolErrCode = "FORBIDDEN" | "NOT_FOUND" | "AMBIGUOUS" | "INVALID" | "ERROR" | "UNKNOWN_TOOL" | "POLICY_DENIED";

@@ -9,6 +9,9 @@ import { ConfirmAction } from "@/components/ui/confirm-action";
 import { DOCUMENT_AUDIENCE, DOCUMENT_CATEGORY, fileSize } from "@/lib/community-labels";
 import { fmtDateTime } from "@/lib/time";
 import { addVersionAction, archiveDocumentAction, updateDocumentAction } from "../../community-actions";
+import { documentIndexInfo } from "@/server/kb/knowledge";
+import { reindexAction } from "../../knowledge/actions";
+import { INDEX_STATUS } from "@/lib/community-labels";
 
 export const metadata = { title: "Document" };
 
@@ -20,6 +23,8 @@ export default async function DocumentPage({ params }: PageProps<"/o/[orgSlug]/d
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;
   const current = d.versions.find((v) => v.v.version === doc.currentVersion);
+  const index = d.canManage ? await documentIndexInfo(ctx, id) : null;
+  const st = index ? INDEX_STATUS[index.status] : null;
   return (
     <>
       <Breadcrumbs items={[{ label: "Documents", href: `${base}/documents` }, { label: doc.title }]} />
@@ -65,6 +70,17 @@ export default async function DocumentPage({ params }: PageProps<"/o/[orgSlug]/d
         </div>
         {d.canManage ? (
           <div className="space-y-6">
+            <Panel>
+              <PanelHeader title="Assistant index" description="The assistant answers questions from the current version's text, citing this document." />
+              <div className="space-y-3 p-4 text-[13px]">
+                <p className="flex flex-wrap items-center gap-2">
+                  {st ? <Badge tone={index!.stale ? "warning" : st.tone}>{index!.stale ? "Indexed with an older model" : st.label}</Badge> : <Badge>Not indexed</Badge>}
+                  {index?.status === "indexed" ? <span className="text-muted">{index.chunkCount} passage{index.chunkCount === 1 ? "" : "s"} · version {index.indexedVersion}</span> : null}
+                </p>
+                {index?.error ? <p className="text-danger">{index.error}</p> : null}
+                {principal.permissions.has("knowledge.manage") ? <ConfirmAction action={reindexAction.bind(null, orgSlug, { documentId: id })} label="Re-index" confirmLabel="Re-index now" variant="secondary" /> : null}
+              </div>
+            </Panel>
             <Panel>
               <PanelHeader title="Edit" />
               <div className="p-4">

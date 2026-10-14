@@ -9,7 +9,8 @@ test("assistant: a manager asks about overdue work and opens a record from the a
   await expect(page.getByText("Demo mode", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Show me all overdue maintenance requests across my properties" }).click();
   // the status trail names the lookup; the answer and the record cards come from the same tool result
-  await expect(page.getByText("Looking up work orders")).toBeVisible();
+  // exact: the trail step, not the live "Looking up work orders…" status that can still be on screen
+  await expect(page.getByText("Looking up work orders", { exact: true })).toBeVisible();
   await expect(page.getByText(/\d+ overdue work orders? across \d+ properties/).first()).toBeVisible();
   await expect(page).toHaveURL(/\/assistant\?c=[0-9a-f-]{36}$/);
   const card = page.locator("article").getByRole("link").filter({ hasText: /^WO-\d+/ }).first();

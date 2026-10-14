@@ -120,6 +120,8 @@ describe("modes and prompt", () => {
     expect(p).toMatch(/Never say something was done, sent, booked or notified unless a tool result says status "executed"/);
     expect(p).toMatch(/You cannot approve plans yourself/);
     expect(p).not.toMatch(/You can only read data/);
+    expect(p).toMatch(/call search_knowledge \(or retrieve_policy\) and answer only from the passages/);
+    expect(p).toMatch(/never answer such questions from general knowledge/);
   });
 });
 
@@ -155,5 +157,9 @@ describe("assistant markdown", () => {
     expect(isSafeHref("//evil.test/x")).toBe(false);
     expect(isSafeHref("/\\evil.test")).toBe(false);
     expect(isSafeHref("/o/acme/assets?status=down")).toBe(true);
+    // quotes (cited passages) render as their own block; links inside them stay in-app only
+    const q = parseMarkdown("> The deposit is $250.\n> Due before the event.\n\n— [Rules § Fees](/o/acme/knowledge/1)");
+    expect(q[0]).toEqual({ t: "q", c: [{ t: "text", v: "The deposit is $250. Due before the event." }] });
+    expect(q[1]).toMatchObject({ t: "p", c: [{ t: "text", v: "— " }, { t: "link", href: "/o/acme/knowledge/1" }] });
   });
 });

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { documents } from "../../db/schema";
 import { can, type Principal } from "../../authz/authorize";
 import { scopeCondition } from "../scope";
@@ -30,22 +30,31 @@ export function canReadDocument(p: Principal, d: Doc): boolean {
 
 // the same rule as SQL, for lists and search
 export function documentVisibleWhere(p: Principal): SQL {
+  return placeVisibleWhere(p, { propertyId: documents.propertyId, buildingId: documents.buildingId, unitId: documents.unitId, audience: documents.audience, status: documents.status }, "active");
+}
+
+type PlaceCols = { propertyId: AnyColumn; buildingId: AnyColumn; unitId?: AnyColumn; audience: AnyColumn; status: AnyColumn };
+
+// shared by documents and knowledge-base entries: staff see everything in their scope; residents see active items
+// for their audience (residents / owners) at their unit, building, property or organization-wide
+export function placeVisibleWhere(p: Principal, c: PlaceCols, activeStatus: string): SQL {
   if (!p.permissions.has("document.read") && !p.permissions.has("document.manage")) return sql`false`;
   if (p.role.category === "staff") {
-    return or(isNull(documents.propertyId), scopeCondition(p, { property: documents.propertyId, building: documents.buildingId }) ?? sql`true`) ?? sql`false`;
+    return or(isNull(c.propertyId), scopeCondition(p, { property: c.propertyId, building: c.buildingId }) ?? sql`true`) ?? sql`false`;
   }
   if (p.role.category !== "resident") return sql`false`;
   const units = [...p.unitIds], blds = [...p.occupantBuildingIds], props = [...p.occupantPropertyIds];
+  const noUnit = c.unitId ? isNull(c.unitId) : undefined;
   const place = or(
-    units.length ? inArray(documents.unitId, units) : undefined,
-    and(isNull(documents.unitId), blds.length ? inArray(documents.buildingId, blds) : sql`false`),
-    and(isNull(documents.unitId), isNull(documents.buildingId), props.length ? inArray(documents.propertyId, props) : sql`false`),
-    and(isNull(documents.unitId), isNull(documents.buildingId), isNull(documents.propertyId)),
+    c.unitId && units.length ? inArray(c.unitId, units) : undefined,
+    and(noUnit, blds.length ? inArray(c.buildingId, blds) : sql`false`),
+    and(noUnit, isNull(c.buildingId), props.length ? inArray(c.propertyId, props) : sql`false`),
+    and(noUnit, isNull(c.buildingId), isNull(c.propertyId)),
   );
   return and(
-    eq(documents.status, "active"),
-    ne(documents.audience, "staff"),
-    p.role.key === "owner" ? undefined : ne(documents.audience, "owners"),
+    eq(c.status, activeStatus),
+    ne(c.audience, "staff"),
+    p.role.key === "owner" ? undefined : ne(c.audience, "owners"),
     place,
   ) ?? sql`false`;
 }

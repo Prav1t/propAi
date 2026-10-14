@@ -7,7 +7,7 @@ import { ZERO_USAGE, type ChatEvent, type ChatHints, type ChatModel, type ChatRe
 // Every message it produces is stored with provider "demo" and labelled as such in the UI.
 
 type ResultLike = {
-  ok?: boolean; summary?: string; highlights?: string[]; note?: string; items?: unknown[]; count?: number;
+  ok?: boolean; cite?: boolean; summary?: string; highlights?: string[]; note?: string; items?: unknown[]; count?: number;
   code?: string; message?: string; options?: string[]; status?: "awaiting_approval" | "executed";
   facts?: { draft?: { title?: string; body: string } };
 };
@@ -34,6 +34,12 @@ export function composeFromResults(results: { name: string; content: string }[])
     if (d.ok && name === "search_work_orders" && creatingWo) {
       // the duplicate check that runs before a new work order
       parts.push(d.count ? `Heads-up — there ${d.count === 1 ? "is already a similar open request" : `are already ${d.count} similar open requests`} (below). Check it isn't the same problem before you approve a new one.` : "No similar open requests, so this won't be a duplicate.");
+      continue;
+    }
+    if (d.ok && d.cite) {
+      // knowledge answers are quotes from the passages with their citations; nothing is paraphrased
+      parts.push(d.items?.length && d.highlights?.length ? d.highlights.join("\n\n")
+        : `I couldn't find anything about that in the documents and knowledge base you can access. The management office can help, and an administrator can add it to the knowledge base.`);
       continue;
     }
     if (d.ok) {

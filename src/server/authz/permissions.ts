@@ -53,6 +53,7 @@ export const PERMISSIONS = {
   "message.manage": { module: "communications", description: "Handle resident conversations for properties in scope" },
   "document.read": { module: "documents", description: "Read documents visible to me" },
   "document.manage": { module: "documents", description: "Upload and manage documents" },
+  "knowledge.manage": { module: "documents", description: "Manage the knowledge base the assistant answers from" },
   "shift.read": { module: "staff", description: "See the shift schedule, clock in/out and write handoffs" },
   "shift.manage": { module: "staff", description: "Schedule shifts for staff in scope" },
   "asset.read": { module: "facility", description: "View assets" },

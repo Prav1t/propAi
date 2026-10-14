@@ -26,6 +26,7 @@ export function MarkdownView({ text }: { text: string }) {
       {blocks.map((b, i) =>
         b.t === "p" ? <p key={i}>{inline(b.c)}</p>
         : b.t === "h" ? <p key={i} className="font-semibold">{inline(b.c)}</p>
+        : b.t === "q" ? <blockquote key={i} className="border-l-2 border-accent/40 pl-3 text-fg/90">{inline(b.c)}</blockquote>
         : b.t === "ul" ? <ul key={i} className="list-disc space-y-1 pl-5">{b.items.map((it, j) => <li key={j}>{inline(it)}</li>)}</ul>
         : <ol key={i} className="list-decimal space-y-1 pl-5">{b.items.map((it, j) => <li key={j}>{inline(it)}</li>)}</ol>,
       )}

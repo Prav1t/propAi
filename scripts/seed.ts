@@ -6,6 +6,7 @@ import { seedOps } from "./seed-ops";
 import { seedCommunity, seedFile } from "./seed-community";
 import { EXTRA_STAFF_DOMAIN, seedFacility, seedFacilityTenant } from "./seed-facility";
 import { seedAi } from "./seed-ai";
+import { seedKnowledge } from "./seed-knowledge";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -275,7 +276,9 @@ async function main() {
     console.log(`✓ seeded 2 orgs, ${Object.keys(propIds).length + 1} properties, ${unitCount + 30} units, ${residentCount} residents, ${userRows.length} demo users`);
   });
   await pool.end();
-  // after the commit: the assistant runs through the app's own connection and permission checks
+  // after the commit: the knowledge base and the assistant run through the app's own connection and permission checks
+  const kb = await seedKnowledge();
+  console.log(`✓ knowledge base: ${kb.entries} entries, ${kb.sources} sources indexed into ${kb.passages} passages`);
   const ai = await seedAi();
   console.log(`✓ assistant: ${ai.conversations} conversations, ${ai.toolCalls} tool calls, ${ai.plans} plans (demo model)`);
 }

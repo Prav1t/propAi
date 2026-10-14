@@ -36,6 +36,9 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   after(async () => {
     const { drainOutbox } = await import("./modules/notifications/service");
     await drainOutbox().catch(() => {});
+    // documents and knowledge entries queued for the assistant's index are processed right away (the worker also polls)
+    const { processIndexQueue } = await import("./kb/indexer");
+    await processIndexQueue().catch(() => {});
   });
   const d = opts.done(result);
   for (const p of d.revalidate ?? [`/o/${opts.orgSlug}`]) revalidatePath(p, "layout");

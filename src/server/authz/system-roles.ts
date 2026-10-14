@@ -50,7 +50,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
     permissions: [...OPS_READ, "workorder.manage", "workorder.create", "task.manage", "inspection.manage",
       "incident.create", "incident.manage", "complaint.manage", "booking.manage", "package.manage", "visitor.manage",
       "parking.manage", "announcement.manage", "shift.read", "shift.manage", "resident.manage", "analytics.read",
-      "amenity.manage", "document.manage", "message.manage"],
+      "amenity.manage", "document.manage", "knowledge.manage", "message.manage"],
   },
   {
     key: "facility_manager", name: "Facility Manager", category: "staff", scopeLevel: "scoped",

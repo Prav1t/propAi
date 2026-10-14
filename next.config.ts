@@ -28,7 +28,8 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
-  serverExternalPackages: ["@node-rs/argon2", "pg"],
+  // unpdf (pdf.js) and mammoth are large; loading them from node_modules keeps them out of every route bundle
+  serverExternalPackages: ["@node-rs/argon2", "pg", "unpdf", "mammoth"],
   experimental: {
     // photo/video uploads on requests, incidents and inspections (per-file limits enforced server-side)
     serverActions: { bodySizeLimit: "30mb" },

@@ -9,6 +9,7 @@ import { matches, pageArgs, toPage, toPrefixQuery, visiblePropertyIds, type Page
 import { fileRows, prepareFiles, withStoredBlobs } from "../../files/service";
 import { DOCUMENT_TYPES } from "../../files/sniff";
 import { canManageDocument, canReadDocument, documentVisibleWhere } from "./access";
+import { queueIndex } from "../../kb/indexer";
 
 type DocRow = typeof documents.$inferSelect;
 
@@ -114,6 +115,7 @@ export async function createDocument(ctx: TenantCtx, input: DocumentInput, uploa
     }).returning();
     const [f] = await tx.insert(files).values(fileRows(prepared, p, "document", d.id, "public")).returning();
     await tx.insert(documentVersions).values({ orgId: p.orgId, documentId: d.id, version: 1, fileId: f.id, notes: input.notes, uploadedByUserId: p.userId });
+    await queueIndex(tx, { orgId: p.orgId, documentId: d.id, version: 1 }); // the assistant can answer from it once indexed
     await auditAs(tx, ctx, "document.created", "document", d.id, undefined, { title: d.title, audience: d.audience, file: f.filename });
     return d;
   }));
@@ -133,6 +135,7 @@ export async function addDocumentVersion(ctx: TenantCtx, id: string, upload: Fil
     await tx.update(files).set({ visibility: "internal" }).where(and(eq(files.entityType, "document"), eq(files.entityId, d.id), sql`${files.id} <> ${f.id}`));
     await tx.insert(documentVersions).values({ orgId: p.orgId, documentId: d.id, version, fileId: f.id, notes, uploadedByUserId: p.userId });
     await tx.update(documents).set({ currentVersion: version }).where(eq(documents.id, d.id));
+    await queueIndex(tx, { orgId: p.orgId, documentId: d.id, version }); // older versions' passages are replaced
     await auditAs(tx, ctx, "document.version_added", "document", d.id, { version: d.currentVersion }, { version, file: f.filename });
     return version;
   }));
@@ -146,6 +149,8 @@ export async function updateDocument(ctx: TenantCtx, id: string, input: z.infer<
     const d = await loadDoc(tx, p.orgId, id);
     if (!canManageDocument(p, d)) throw canReadDocument(p, d) ? new ForbiddenError() : new NotFoundError();
     const [after] = await tx.update(documents).set(input).where(eq(documents.id, id)).returning();
+    // passages carry the title for search and citations; audience and status are checked live at retrieval
+    if (after.title !== d.title) await queueIndex(tx, { orgId: p.orgId, documentId: id, version: after.currentVersion });
     await auditAs(tx, ctx, "document.updated", "document", id, { title: d.title, audience: d.audience, category: d.category }, input);
     return after;
   });

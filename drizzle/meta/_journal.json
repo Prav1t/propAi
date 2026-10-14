@@ -113,6 +113,20 @@
       "when": 1791255380822,
       "tag": "0015_rls_ai_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791262242715,
+      "tag": "0016_knowledge_base",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791262243715,
+      "tag": "0017_rls_knowledge",
+      "breakpoints": true
     }
   ]
 }

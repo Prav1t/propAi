@@ -10,7 +10,8 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   // iteration 5: front desk & facility
   "visitors", "parking_spaces", "vehicles", "parking_permits", "parking_violations", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
   // iteration 6: AI assistant
-  "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies"];
+  "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies",
+  "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
 
 let A: string; // Pacific Properties
@@ -59,7 +60,8 @@ describe("reads", () => {
   });
   it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents",
     "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
-    "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies"])("%s: no context sees nothing", async (table) => {
+    "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies",
+    "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks"])("%s: no context sees nothing", async (table) => {
     await asApp({}, async (q) => {
       const { rows } = await q(`select count(*)::int as n from ${table}`);
       expect(rows[0].n).toBe(0);
@@ -101,6 +103,16 @@ describe("reads", () => {
     await asApp({ orgId: A, userId: adminId }, async (q) => {
       expect((await q("update ai_approvals set status = 'rejected' where org_id = $1", [B])).rowCount).toBe(0);
       expect((await q("delete from ai_policies where org_id = $1", [B])).rowCount).toBe(0);
+    });
+  });
+  it("knowledge passages can't be planted in another organization", async () => {
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      const [src] = (await q("select id from kb_sources limit 1")).rows;
+      await expect(q("insert into kb_chunks (org_id, source_id, version, ordinal, context, content) values ($1, $2, 1, 99, 'x', 'planted')", [B, src.id])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      expect((await q("update kb_chunks set content = 'x' where org_id = $1", [B])).rowCount).toBe(0);
+      expect((await q("delete from knowledge_entries where org_id = $1", [B])).rowCount).toBe(0);
     });
   });
   it("outbox: org context enqueues only for itself; the worker's system context reads across orgs", async () => {

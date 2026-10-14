@@ -1,9 +1,9 @@
-// A deliberately tiny markdown subset for assistant answers: paragraphs, bullet/numbered lists, **bold**, `code`
+// A deliberately tiny markdown subset for assistant answers: paragraphs, headings, > quotes, bullet/numbered lists, **bold**, `code`
 // and links. It returns a tree that React renders as elements (never HTML strings), so model output can't inject markup.
 // Only in-app links (starting with a single "/") become links; anything else stays plain text.
 
 export type Inline = { t: "text"; v: string } | { t: "b"; c: Inline[] } | { t: "code"; v: string } | { t: "link"; href: string; c: Inline[] };
-export type Block = { t: "p"; c: Inline[] } | { t: "ul"; items: Inline[][] } | { t: "ol"; items: Inline[][] } | { t: "h"; c: Inline[] };
+export type Block = { t: "p"; c: Inline[] } | { t: "ul"; items: Inline[][] } | { t: "ol"; items: Inline[][] } | { t: "h"; c: Inline[] } | { t: "q"; c: Inline[] };
 
 export const isSafeHref = (href: string) => /^\/(?!\/)[A-Za-z0-9\-._~/?#[\]@!$&'()*+,;=%:]*$/.test(href) && !/^\/\\/.test(href);
 
@@ -60,6 +60,11 @@ export function parseMarkdown(text: string): Block[] {
   const blocks: Block[] = [];
   let para: string[] = [];
   let list: { t: "ul" | "ol"; items: string[] } | null = null;
+  let quote: string[] = [];
+  const endQuote = () => {
+    if (quote.length) blocks.push({ t: "q", c: parseInline(quote.join(" ")) });
+    quote = [];
+  };
   const endPara = () => {
     if (para.length) blocks.push({ t: "p", c: parseInline(para.join(" ")) });
     para = [];
@@ -73,6 +78,14 @@ export function parseMarkdown(text: string): Block[] {
     const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
     const num = line.match(/^\s*\d{1,3}[.)]\s+(.*)$/);
     const head = line.match(/^#{1,4}\s+(.*)$/);
+    const q = line.match(/^\s*>\s?(.*)$/);
+    if (q) {
+      endPara();
+      endList();
+      quote.push(q[1].trim());
+      continue;
+    }
+    endQuote();
     if (!line.trim()) {
       endPara();
       endList();
@@ -93,6 +106,7 @@ export function parseMarkdown(text: string): Block[] {
       para.push(line.trim());
     }
   }
+  endQuote();
   endPara();
   endList();
   return blocks;

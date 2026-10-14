@@ -133,3 +133,34 @@ describe("demo answers come only from tool results", () => {
     expect(text).not.toContain("secret detail");
   });
 });
+
+describe("demo intent planner — documents and the knowledge base", () => {
+  const KB = new Set<string>([...RESIDENT, "search_knowledge", "retrieve_policy", "search_documents"]);
+  it("sends rules, policy and how-to questions to search_knowledge with the user's own words", () => {
+    for (const q of ["What are the rules for booking the party room?", "Can I have a barbecue on my balcony?", "Are dogs allowed?", "How do I book the service elevator for my move?", "What do the bylaws say about amenity rooms?"]) {
+      expect(call(q, KB, resident)).toEqual([{ name: "search_knowledge", input: { question: q } }]);
+    }
+    // staff keep the place as a filter; residents' place comes from their home
+    expect(call("What is our after-hours flood procedure at Fraser Towers?")).toEqual([{ name: "search_knowledge", input: { question: "What is our after-hours flood procedure at Fraser Towers?", location: "Fraser Towers" } }]);
+  });
+  it("lists documents when asked for documents, and leaves contact questions to the directory rules", () => {
+    expect(call("Show me the bylaws documents")).toEqual([{ name: "search_documents", input: { category: "bylaws" } }]);
+    expect(call("What's the emergency number for my building?", KB, resident)[0].name).toBe("my_home");
+  });
+  it("tries the documents for any other question before admitting it can't parse it", () => {
+    expect(call("Where do I put old paint cans?", KB, resident)).toEqual([{ name: "search_knowledge", input: { question: "Where do I put old paint cans?" } }]);
+    expect(plan("Write me a poem about elevators", KB, resident).kind).toBe("reply"); // not a question
+  });
+});
+
+describe("demo answers from passages", () => {
+  it("quotes the passages with their citations, or says nothing covers it", () => {
+    const found = composeFromResults([{ name: "search_knowledge", content: JSON.stringify({
+      ok: true, cite: true, summary: "Found 1 passage in 1 source.", items: [{ ref: "[1]" }],
+      highlights: ["Here's what your organization's documents say:", "> The deposit is $250.\n\n— [Party room rules · § Fees](/o/acme/knowledge/1)"],
+    }) }]);
+    expect(found).toBe("Here's what your organization's documents say:\n\n> The deposit is $250.\n\n— [Party room rules · § Fees](/o/acme/knowledge/1)");
+    const none = composeFromResults([{ name: "search_knowledge", content: JSON.stringify({ ok: true, cite: true, summary: "Nothing … covers that.", count: 0 }) }]);
+    expect(none).toMatch(/^I couldn't find anything about that in the documents and knowledge base you can access/);
+  });
+});

@@ -2,6 +2,7 @@ import { checkSlaBreaches, drainOutbox } from "./modules/notifications/service";
 import { publishDueAnnouncements } from "./modules/announcements/service";
 import { packageReminders } from "./modules/packages/service";
 import { generatePreventiveMaintenance } from "./modules/assets/service";
+import { processIndexQueue } from "./kb/indexer";
 import { log } from "./log";
 
 const g = globalThis as unknown as { __workerTimer?: ReturnType<typeof setInterval> };
@@ -14,7 +15,8 @@ export async function workerTick() {
     const reminded = await packageReminders();
     const pm = await generatePreventiveMaintenance();
     const delivered = await drainOutbox();
-    if (breached || published || reminded || pm || delivered) log.info("worker.tick", { breached, published, reminded, pm, delivered });
+    const indexed = await processIndexQueue();
+    if (breached || published || reminded || pm || delivered || indexed) log.info("worker.tick", { breached, published, reminded, pm, delivered, indexed });
   } catch (err) {
     log.error("worker.tick_failed", { err });
   }

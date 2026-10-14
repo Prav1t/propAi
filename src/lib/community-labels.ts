@@ -32,3 +32,12 @@ export const DOCUMENT_CATEGORY: Record<string, string> = {
 export const DOCUMENT_AUDIENCE: Record<string, string> = { staff: "Staff only", residents: "Residents", owners: "Owners only" };
 export const money = (cents: number) => `$${(cents / 100).toLocaleString("en-CA", { minimumFractionDigits: cents % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
 export const fileSize = (n: number) => (n > 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.ceil(n / 1000))} KB`);
+
+export const KNOWLEDGE_CATEGORY: Record<string, string> = {
+  rules: "House rules", amenities: "Amenities", procedures: "Procedures", emergency: "Emergencies", maintenance: "Maintenance",
+  moving: "Moving in & out", parking: "Parking", policy: "Policies", general: "General",
+};
+export const INDEX_STATUS: Record<string, { label: string; tone: "neutral" | "accent" | "success" | "warning" | "danger" }> = {
+  queued: { label: "Queued", tone: "neutral" }, indexing: { label: "Indexing", tone: "accent" }, indexed: { label: "Indexed", tone: "success" },
+  failed: { label: "Failed", tone: "danger" }, unsupported: { label: "Can't read", tone: "warning" }, empty: { label: "No text", tone: "warning" },
+};

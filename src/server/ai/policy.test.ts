@@ -70,6 +70,12 @@ describe("action tools offered per role", () => {
     expect(desk).toEqual(expect.arrayContaining(["log_package", "register_visitor"]));
     expect(desk).not.toContain("assign_work_order");
   });
+  it("everyone with document access can search the knowledge base; vendors can't", () => {
+    const read = (role: string) => toolsForPrincipal(principal(role)).map((t) => t.name).filter((n) => ["search_knowledge", "retrieve_policy", "search_documents"].includes(n));
+    expect(read("resident")).toEqual(["search_knowledge", "retrieve_policy", "search_documents"]);
+    expect(read("concierge")).toEqual(["search_knowledge", "retrieve_policy", "search_documents"]);
+    expect(read("vendor")).toEqual([]);
+  });
   it("vendors only act on work they can see", () => {
     const v = names("vendor");
     expect(v).not.toContain("create_work_order");
