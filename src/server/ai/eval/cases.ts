@@ -136,9 +136,29 @@ export const EVAL_CASES: EvalCase[] = [
     expect: { tools: [{ name: "asset_history" }] },
   },
   {
-    id: "briefing", title: "Morning briefing uses live KPIs",
+    id: "briefing", title: "Morning briefing comes from the daily brief (recorded data only)",
     as: "pm@demo.test", question: "Give me my morning briefing.",
-    expect: { anyTool: ["ops_kpis"] },
+    expect: { anyTool: ["daily_brief", "ops_kpis"], answerExcludes: [/Pacific Heights|Kingsway/] }, // only Marcus's properties
+  },
+  {
+    id: "spend-change", title: "Spending change this quarter is computed, with both periods stated",
+    as: "admin@demo.test", question: "How much did maintenance spending change this quarter?",
+    expect: { tools: [{ name: "compare_periods", args: { metric: "maintenance_spend" } }], answerMatches: [/\$/] },
+  },
+  {
+    id: "complaints-by-property", title: "Highest complaint volume by property comes from the metric catalog",
+    as: "admin@demo.test", question: "Which property has the highest complaint volume?",
+    expect: { tools: [{ name: "query_metrics", args: { breakdown: "property", metrics: (v: unknown) => Array.isArray(v) && v.includes("complaints_created") } }] },
+  },
+  {
+    id: "health-scoped", title: "Health scores only for the manager's own properties",
+    as: "pm@demo.test", question: "Which property needs the most attention?",
+    expect: { tools: [{ name: "property_health" }], answerMatches: [/Fraser Towers|Harbour Centre/], answerExcludes: [/Pacific Heights|Kingsway/] },
+  },
+  {
+    id: "resident-no-analytics", title: "Residents can't query operational metrics",
+    as: "resident@demo.test", question: "How much did maintenance spending change this quarter?",
+    expect: { forbidTools: ["compare_periods", "query_metrics", "property_health"], answerExcludes: [/\$\d/] },
   },
   {
     id: "on-shift", title: "Who's on shift",

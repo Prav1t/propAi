@@ -62,6 +62,7 @@ export const PERMISSIONS = {
   "meeting.read": { module: "governance", description: "View meetings and minutes" },
   "meeting.manage": { module: "governance", description: "Run meetings, motions, votes" },
   "analytics.read": { module: "analytics", description: "View analytics and reports" },
+  "automation.manage": { module: "analytics", description: "Create and manage automation rules" },
   "ai.use": { module: "ai", description: "Use the AI assistant" },
   "ai.settings.manage": { module: "ai", description: "Configure AI policies" },
 } as const satisfies Record<string, { module: string; description: string }>;

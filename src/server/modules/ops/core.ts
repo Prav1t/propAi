@@ -40,9 +40,14 @@ export async function listTimeline(tx: Tx, orgId: string, entityType: string, en
     .orderBy(asc(timelineEvents.createdAt));
 }
 
-// domain event written in the same transaction as the change (transactional outbox)
+// domain event written in the same transaction as the change (transactional outbox).
+// Events raised by an automation's action carry the run that caused them, so rules can't trigger themselves in a loop.
 export async function emit(tx: Tx, ctx: TenantCtx, type: string, payload: Record<string, unknown>) {
-  await tx.insert(outboxEvents).values({ orgId: ctx.principal.orgId, type, payload, actorUserId: ctx.principal.userId });
+  const a = ctx.automation;
+  await tx.insert(outboxEvents).values({
+    orgId: ctx.principal.orgId, type, payload, actorUserId: ctx.principal.userId,
+    ...(a ? { causedByRunId: a.runId, causedByWorkflowId: a.workflowId, chainDepth: a.depth + 1 } : {}),
+  });
 }
 
 // events raised by the background worker (no acting user)

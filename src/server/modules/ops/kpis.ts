@@ -1,9 +1,11 @@
 import "server-only";
-import { and, count, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { complaints, incidents, inspections, properties, tasks, vendors, workOrders } from "../../db/schema";
 import { tenantTx, type TenantCtx } from "../context";
 import { scopeCondition } from "../scope";
 import { OPEN_STATUSES } from "../maintenance/rules";
+import { metricValues } from "../../analytics/metrics";
+import { resolvePeriod } from "../../analytics/period";
 
 const DAY = 86_400_000;
 
@@ -11,7 +13,6 @@ const DAY = 86_400_000;
 export async function getOpsKpis(ctx: TenantCtx) {
   const p = ctx.principal;
   const now = new Date();
-  const since30 = new Date(now.getTime() - 30 * DAY);
   return tenantTx(ctx, async (tx) => {
     const out: Record<string, unknown> = {};
     if (p.permissions.has("workorder.read")) {
@@ -24,19 +25,16 @@ export async function getOpsKpis(ctx: TenantCtx) {
         emergency: sql<number>`count(*) filter (where ${workOrders.isEmergency})::int`,
         unassigned: sql<number>`count(*) filter (where ${workOrders.assignedMembershipId} is null and ${workOrders.vendorId} is null)::int`,
       }).from(workOrders).where(open);
-      const [perf] = await tx.select({
-        completed: count(),
-        avgResponseH: sql<number | null>`round((avg(extract(epoch from (${workOrders.firstResponseAt} - ${workOrders.createdAt}))) / 3600)::numeric, 1)::float`,
-        avgResolveH: sql<number | null>`round((avg(extract(epoch from (${workOrders.completedAt} - ${workOrders.createdAt}))) / 3600)::numeric, 1)::float`,
-        onTime: sql<number>`count(*) filter (where ${workOrders.completedAt} <= ${workOrders.resolveDueAt})::int`,
-        spend: sql<number>`coalesce(sum(${workOrders.cost}), 0)::float`,
-      }).from(workOrders).where(and(base, isNotNull(workOrders.completedAt), gte(workOrders.completedAt, since30)));
+      // 30-day performance uses the shared metric definitions, so these match the analytics page and the assistant
+      const perfRows = await metricValues(ctx, ["requests_completed", "first_response_hours", "resolution_hours", "sla_compliance", "maintenance_spend"], resolvePeriod("30d", p.orgTimezone ?? "UTC", now), null, {}, { operational: true });
+      const pv = (k: string) => perfRows.find((m) => m.key === k)?.value ?? null;
+      const perf = { completed: pv("requests_completed") ?? 0, avgResponseH: pv("first_response_hours"), avgResolveH: pv("resolution_hours"), slaCompliance: pv("sla_compliance") === null ? null : Math.round(pv("sla_compliance")!), spend: pv("maintenance_spend") ?? 0 };
       const byCategory = await tx.select({ key: workOrders.category, n: count() }).from(workOrders).where(open).groupBy(workOrders.category).orderBy(desc(count())).limit(8);
       const byProperty = await tx.select({ key: properties.name, id: properties.id, n: count(), overdue: sql<number>`count(*) filter (where ${workOrders.resolveDueAt} < now())::int` })
         .from(workOrders).innerJoin(properties, eq(properties.id, workOrders.propertyId)).where(open).groupBy(properties.id, properties.name).orderBy(desc(count()));
       const byVendor = await tx.select({ key: vendors.name, id: vendors.id, n: count(), overdue: sql<number>`count(*) filter (where ${workOrders.resolveDueAt} < now())::int` })
         .from(workOrders).innerJoin(vendors, eq(vendors.id, workOrders.vendorId)).where(open).groupBy(vendors.id, vendors.name).orderBy(desc(count())).limit(6);
-      out.workOrders = { ...c, ...perf, slaCompliance: perf.completed ? Math.round((perf.onTime / perf.completed) * 100) : null, byCategory, byProperty, byVendor };
+      out.workOrders = { ...c, ...perf, byCategory, byProperty, byVendor };
     }
     if (p.permissions.has("complaint.read")) {
       const [r] = await tx.select({ open: count() }).from(complaints)

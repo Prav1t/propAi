@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–8)
+## Implemented (Iterations 1–9)
 
 ### Identity & auth (🌐)
 
@@ -153,6 +153,22 @@ Requires the **pgvector** extension (migration `0016` runs `CREATE EXTENSION IF 
 
 Organization settings gained `aiEnabled` and `aiMonthlyRequestCap` (in `organizations.settings`). Sensitive reads by the assistant (the resident directory) also write an `audit_logs` row `ai.sensitive_read` with `ai_generated = true`.
 
+### Analytics & automation (🔒, Iteration 9)
+
+| Table | Purpose / key columns |
+|---|---|
+| `workflows` | an automation rule: optional `property_id` (cascade; null = every property), `name`, `description`, `trigger_type` (11 event triggers or `schedule`, check constraint), `schedule` jsonb `{frequency daily/weekdays/weekly/monthly, time "HH:MM", weekday?, dayOfMonth?}` (present **iff** the trigger is `schedule`, check constraint), `conditions` jsonb `[{field, op, value}]`, `actions` jsonb (ordered, validated by `workflowSchema`), `enabled`, `owner_user_id` (whose permissions runs use — the last person who saved or enabled it), `version` (bumped on every edit; runs record the version they ran), `next_run_at` (scheduled rules), `last_run_at`, `run_count`, `paused_reason` (set when the runaway guard turns it off), created by/at, `updated_at`. Partial indexes: enabled rules by `(org_id, trigger_type)`; enabled schedules by `next_run_at` |
+| `workflow_runs` | one execution: `workflow_id` (cascade), `workflow_version`, the triggering `event_id` **or** `scheduled_for` slot — unique per `(workflow_id, event_id)` and per `(workflow_id, scheduled_for)` (partial unique indexes: the idempotency guarantee), `trigger_type`, the subject `entity_type`/`entity_id`/`entity_label`, `property_id`, `status` running / waiting_approval / completed / failed / rejected (check), `depth` (chain depth of the triggering event), `steps` jsonb `[{index, type, label, status pending/done/skipped/failed/waiting, summary, error, record {ref, title, href}, at, action}]`, `approval_role`, `approval_step`, `approval_requested_at`, `decided_by_user_id`/`decided_at`/`decision_note`, `error`, `started_at`, `finished_at`. Indexed by `(org_id, created_at)`, `(workflow_id, created_at)`, `(org_id, entity_type, entity_id)` and waiting runs by `(org_id, status)` |
+| `daily_briefs` | a delivered operations brief: `user_id`, `brief_date` (the recipient's organization-local date), `content` jsonb (the sections and insights as built for that person). Unique per `(org_id, user_id, brief_date)`, so the worker delivers at most one per person per day |
+
+New columns:
+- `outbox_events.automation_at` (when automation evaluated the event; the backfill in `0018` marks every earlier event as evaluated so new rules never replay history), `caused_by_run_id`, `caused_by_workflow_id`, `chain_depth` (loop protection). Partial index `outbox_automation_pending_idx` on `created_at` where `automation_at is null`.
+- `audit_logs.workflow_run_id` — set on every change an automation run made.
+- `work_orders.sla_warned_at` — the "due soon" warning was sent (reset when the target changes). Partial index `work_orders_sla_watch_idx` on `resolve_due_at` for open, unwarned requests.
+- `tasks.source` accepts `automation`.
+
+Analytics indexes (`0019`): `work_orders (org_id, completed_at)` where completed, `packages (org_id, received_at)`, `bookings (org_id, starts_at)`. Reports, metrics and health-score weights are code and organization settings (`organizations.settings.analytics`: `slaWarningMinutes`, `briefEnabled`, `briefTime`, `healthWeights`), not tables.
+
 ### Full-text search
 
 Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades), `documents` (title, description) and `assets` (name, tag, make, model, serial, location, category). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input; hyphenated codes such as `RTU-4` match either joined (`rtu4`) or by part (`rtu & 4`), the way Postgres indexes them. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
@@ -186,6 +202,7 @@ current_setting('app.pass_token_hash')                      (public guest-pass p
 | `outbox_events` | insert in org context; read in org context or by the worker; update only by the worker inside the named org |
 | Front desk & facility tables (`visitors`, `parking_*`, `vehicles`, `shifts`, `shift_handoffs`, `assets`, `pm_schedules`, `asset_downtime` — 10 tables, migration `0011`) | same rule as the community tables. **Plus** `visitor_pass`: with no org context, a transaction that sets `app.pass_token_hash` may SELECT exactly the visitor row with that hash (the public pass page); it then switches to that org to read the building's public details |
 | Knowledge base (migration `0017`) | `knowledge_entries`, `knowledge_entry_versions`, `kb_sources`, `kb_chunks`: the standard tenant rule (`org_id = app_org()`; platform admin / worker system read; writes only in org context). Who may read a passage inside the org (audience, place, active, current version) is applied in SQL by the retrieval service before ranking, using the same rule as the Documents page |
+| Automation (migration `0019`) | `workflows`, `workflow_runs`, `daily_briefs`: the standard tenant rule (`org_id = app_org()`; platform admin / worker system read; writes only in org context, so the worker names the organization for every write). Who may see or edit a rule (scope), decide a run (the approval role at that property) or read a brief (its recipient) is enforced in the services |
 | AI plans and policies (migration `0015`) | `ai_approvals`, `ai_policies`: the standard tenant rule (`org_id = app_org()`, platform admin / system read). Only the requester can see or decide a plan — enforced in the service (`requested_by_user_id = app user` on every query); policies are changed only by `ai.settings.manage` |
 | AI tables (migration `0013`) | `ai_conversations`, `ai_messages`: **owner only** — `org_id = app_org() AND user_id = app_user()` for read and write; no platform-admin or worker bypass. `ai_tool_calls`, `ai_usage`: the standard tenant rule (admins read them through `ai.settings.manage` in the service) |
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
@@ -196,6 +213,5 @@ Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 te
 
 | Iteration | Tables |
 |---|---|
-| 9 | `workflows`, `workflow_runs`, `reports`, `scheduled_jobs` |
 | 10 | `plans`, `subscriptions`, `invoices`, `usage_records`, `api_keys`, `webhooks`, `webhook_deliveries`, `integrations`, `feature_flags` |
 | later | `storage_lockers` (not built in Iteration 5) |

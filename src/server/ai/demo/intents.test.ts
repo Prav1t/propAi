@@ -69,7 +69,9 @@ describe("demo intent planner — permissions and phrasing", () => {
     expect(call("What emergencies are open?")[0].input).toMatchObject({ view: "emergency" });
     expect(call("What's the emergency number for my building?", RESIDENT, resident)[0].name).toBe("my_home");
     expect(call("What preventive maintenance is due this week?")[0]).toMatchObject({ name: "calendar_range", input: { sources: ["pm"] } });
-    expect(call("Give me my morning briefing").map((c) => c.name)).toEqual(["ops_kpis", "search_work_orders", "search_incidents"]);
+    expect(call("Give me my morning briefing").map((c) => c.name)).toEqual(["daily_brief"]);
+    // without the brief (e.g. an older role set), the KPI snapshot answers it
+    expect(call("Give me my morning briefing", new Set([...ALL].filter((n) => n !== "daily_brief"))).map((c) => c.name)).toEqual(["ops_kpis", "search_work_orders", "search_incidents"]);
     expect(call("Show open work orders at Harbour Centre")[0].input).toEqual({ view: "open", location: "Harbour Centre" });
   });
   it("treats 'tell me about' as a question, not a message to send", () => {
@@ -83,6 +85,28 @@ describe("demo intent planner — permissions and phrasing", () => {
   it("falls back to an honest description of demo mode", () => {
     const p = plan("Write me a poem about elevators");
     expect(p.kind === "reply" && p.text).toMatch(/demo mode without a language model/);
+  });
+});
+
+describe("demo intent planner — analytics questions go to the metric catalog", () => {
+  it("numbers, comparisons, breakdowns and health scores", () => {
+    expect(call("How much did maintenance spending change this quarter?")).toEqual([{ name: "compare_periods", input: { metric: "maintenance_spend", comparison: "quarter" } }]);
+    expect(call("Which property has the highest complaint volume?")).toEqual([{ name: "query_metrics", input: { metrics: ["complaints_created"], breakdown: "property" } }]);
+    expect(call("What are the most common resident complaints?")).toEqual([{ name: "query_metrics", input: { metrics: ["complaints_created"], breakdown: "category" } }]);
+    expect(call("What's our average resolution time this month at Fraser Towers?")).toEqual([{ name: "query_metrics", input: { metrics: ["resolution_hours"], period: "mtd", location: "Fraser Towers" } }]);
+    expect(call("How many maintenance requests did we get last week?")).toEqual([{ name: "query_metrics", input: { metrics: ["requests_created"], period: "7d" } }]);
+    expect(call("Are incidents up compared with last month?")).toEqual([{ name: "compare_periods", input: { metric: "incidents_reported", comparison: "month" } }]);
+    expect(call("Which property needs the most attention?")).toEqual([{ name: "property_health", input: {} }]);
+    expect(call("What's the health score for Harbour Centre?")).toEqual([{ name: "property_health", input: { location: "Harbour Centre" } }]);
+  });
+  it("leaves live lists and vendor questions to their own tools", () => {
+    expect(call("How many packages are waiting for pickup?")[0].name).toBe("search_packages");
+    expect(call("How many maintenance requests are overdue?")[0]).toMatchObject({ name: "search_work_orders", input: { view: "overdue" } });
+    expect(call("Which vendors have the slowest average response?")[0].name).toBe("vendor_performance");
+  });
+  it("residents don't get analytics", () => {
+    const p = plan("How much did maintenance spending change this quarter?", RESIDENT, resident);
+    expect(p.kind === "tools" ? p.calls.map((c) => c.name) : []).not.toContain("compare_periods");
   });
 });
 

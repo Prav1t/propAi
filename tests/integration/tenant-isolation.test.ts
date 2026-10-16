@@ -11,7 +11,9 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   "visitors", "parking_spaces", "vehicles", "parking_permits", "parking_violations", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
   // iteration 6: AI assistant
   "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies",
-  "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks"];
+  "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks",
+  // iteration 9: analytics & automation
+  "workflows", "workflow_runs", "daily_briefs"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
 
 let A: string; // Pacific Properties
@@ -61,7 +63,7 @@ describe("reads", () => {
   it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents",
     "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
     "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies",
-    "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks"])("%s: no context sees nothing", async (table) => {
+    "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks", "workflows", "workflow_runs", "daily_briefs"])("%s: no context sees nothing", async (table) => {
     await asApp({}, async (q) => {
       const { rows } = await q(`select count(*)::int as n from ${table}`);
       expect(rows[0].n).toBe(0);
@@ -113,6 +115,21 @@ describe("reads", () => {
     await asApp({ orgId: A, userId: adminId }, async (q) => {
       expect((await q("update kb_chunks set content = 'x' where org_id = $1", [B])).rowCount).toBe(0);
       expect((await q("delete from knowledge_entries where org_id = $1", [B])).rowCount).toBe(0);
+    });
+  });
+  it("automation rules, runs and briefs can't be planted, read or changed across organizations", async () => {
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into workflows (org_id, name, trigger_type) values ($1, 'planted', 'complaint.created')", [B])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      const [wf] = (await q("select id from workflows limit 1")).rows;
+      await expect(q("insert into workflow_runs (org_id, workflow_id, workflow_version, trigger_type) values ($1, $2, 1, 'schedule')", [B, wf.id])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      expect((await q("update workflows set enabled = true where org_id = $1", [B])).rowCount).toBe(0);
+      expect((await q("update workflow_runs set status = 'failed' where org_id = $1", [B])).rowCount).toBe(0);
+      expect((await q("delete from daily_briefs where org_id = $1", [B])).rowCount).toBe(0);
+      expect((await q("select count(*)::int n from daily_briefs where org_id = $1", [B])).rows[0].n).toBe(0);
     });
   });
   it("outbox: org context enqueues only for itself; the worker's system context reads across orgs", async () => {

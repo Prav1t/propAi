@@ -20,6 +20,9 @@ import { parkingStats } from "@/server/modules/parking/service";
 import { facilityStats } from "@/server/modules/assets/service";
 import { hours } from "@/lib/facility-labels";
 import { DeskConsole } from "../desk/desk-console";
+import { pendingApprovalsFor } from "@/server/automation/service";
+import { computeInsights } from "@/server/analytics/insights";
+import { canGetBrief } from "@/server/analytics/brief";
 
 function StatLink({ href, ...p }: { href: string; label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return <Link href={href} className="block rounded-[var(--radius-lg)] focus-visible:outline-2 [&>div]:hover:border-border-strong"><Stat {...p} /></Link>;
@@ -62,8 +65,8 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
   const wo = kpis.workOrders;
   const assignedToMe = principal.permissions.has("workorder.read.assigned") || principal.permissions.has("workorder.manage") ? await listWorkOrders(ctx, { view: "mine", pageSize: 6 }) : null;
   const myTasks = canUseTasks(principal) ? await listTasks(ctx, { view: "mine" }) : null;
-  const [pkg, bk, msgs, vis, park, fac] = await Promise.all([packageStats(ctx), bookingStats(ctx), principal.permissions.has("message.manage") ? messageBadgeCount(ctx) : Promise.resolve(null),
-    visitorStats(ctx), parkingStats(ctx), facilityStats(ctx)]);
+  const [pkg, bk, msgs, vis, park, fac, approvals, insights] = await Promise.all([packageStats(ctx), bookingStats(ctx), principal.permissions.has("message.manage") ? messageBadgeCount(ctx) : Promise.resolve(null),
+    visitorStats(ctx), parkingStats(ctx), facilityStats(ctx), pendingApprovalsFor(ctx), principal.permissions.has("analytics.read") ? computeInsights(ctx) : Promise.resolve([])]);
 
   return (
     <>
@@ -72,6 +75,28 @@ export default async function DashboardPage({ params }: PageProps<"/o/[orgSlug]/
         description={scoped ? `Showing the ${stats.properties === 1 ? "property" : "properties"} assigned to you as ${principal.role.name}.` : `Portfolio overview for ${principal.orgName}.`}
       />
       {principal.permissions.has("ai.use") ? <AskBox base={base} placeholder="Ask anything — “Which work orders are overdue at Fraser Towers?”" className="mb-6" /> : null}
+      {approvals.length || insights.length || canGetBrief(ctx) ? (
+        <div className="mb-6 grid gap-4 lg:grid-cols-2">
+          {approvals.length ? (
+            <Panel className="border-warning/40">
+              <PanelHeader title="Waiting for your approval" description="Automation rules paused for your decision" actions={<Link href={`${base}/automations?tab=approvals`} className="text-[13px] text-accent hover:underline">All</Link>} />
+              <ul className="divide-y divide-border">{approvals.slice(0, 4).map((a) => (
+                <li key={a.id} className="px-4 py-2.5"><Link href={`${base}/automations/runs/${a.id}`} className="text-[13px] font-medium hover:underline">{a.workflowName}</Link><p className="text-[12px] text-muted">{a.entityLabel ?? ""}{a.propertyName ? ` · ${a.propertyName}` : ""}</p></li>
+              ))}</ul>
+            </Panel>
+          ) : null}
+          {insights.length ? (
+            <Panel className={approvals.length ? undefined : "lg:col-span-2"}>
+              <PanelHeader title="Worth a look" description="Patterns in recorded data" actions={canGetBrief(ctx) ? <Link href={`${base}/brief`} className="text-[13px] text-accent hover:underline">Today&apos;s brief</Link> : null} />
+              <ul className="divide-y divide-border">{insights.slice(0, 4).map((i) => (
+                <li key={i.key} className="px-4 py-2.5"><Link href={`${base}${i.href}`} className="text-[13px] font-medium hover:underline">{i.title}</Link><p className="text-[12px] text-muted">{i.detail}</p></li>
+              ))}</ul>
+            </Panel>
+          ) : canGetBrief(ctx) ? (
+            <Panel className={approvals.length ? undefined : "lg:col-span-2"}><div className="flex items-center justify-between px-4 py-3 text-[13px]"><span>Your daily brief has what changed overnight and what needs attention today.</span><Link href={`${base}/brief`} className="text-accent hover:underline">Open it</Link></div></Panel>
+          ) : null}
+        </div>
+      ) : null}
       {wo ? (
         <section aria-labelledby="ops-h" className="mb-6">
           <h2 id="ops-h" className="sr-only">Operations</h2>

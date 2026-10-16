@@ -418,6 +418,7 @@ export const auditLogs = pgTable(
     requestId: text("request_id"),
     aiGenerated: boolean("ai_generated").notNull().default(false),
     approvalId: uuid("approval_id"),
+    workflowRunId: uuid("workflow_run_id"), // set when an automation rule made the change (Iteration 9)
     createdAt: createdAt(),
   },
   (t) => [
@@ -604,6 +605,7 @@ export const workOrders = pgTable(
     closedAt: ts("closed_at"),
     cancelledAt: ts("cancelled_at"),
     slaBreachedAt: ts("sla_breached_at"),
+    slaWarnedAt: ts("sla_warned_at"), // "approaching SLA" warning sent (Iteration 9)
     cost: numeric("cost", { precision: 12, scale: 2 }),
     resolutionNotes: text("resolution_notes"),
     triageRuleId: uuid("triage_rule_id").references(() => triageRules.id, { onDelete: "set null" }),
@@ -680,7 +682,7 @@ export const tasks = pgTable(
     check("tasks_status_ck", sql`${t.status} in ('open','in_progress','blocked','done','cancelled')`),
     check("tasks_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
     check("tasks_recurrence_ck", sql`${t.recurrence} in ('none','daily','weekly','monthly')`),
-    check("tasks_source_ck", sql`${t.source} in ('manual','work_order','inspection','incident','complaint','recurring','system')`),
+    check("tasks_source_ck", sql`${t.source} in ('manual','work_order','inspection','incident','complaint','recurring','system','automation')`),
   ],
 );
 
@@ -903,10 +905,17 @@ export const outboxEvents = pgTable(
     actorUserId: uuid("actor_user_id"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
-    processedAt: ts("processed_at"),
+    processedAt: ts("processed_at"), // notifications delivered
+    automationAt: ts("automation_at"), // automation rules evaluated (Iteration 9)
+    causedByRunId: uuid("caused_by_run_id"), // the automation run whose action raised this event, if any
+    causedByWorkflowId: uuid("caused_by_workflow_id"),
+    chainDepth: integer("chain_depth").notNull().default(0), // automation → event → automation … hops; capped
     createdAt: createdAt(),
   },
-  (t) => [index("outbox_pending_idx").on(t.createdAt).where(sql`${t.processedAt} is null`)],
+  (t) => [
+    index("outbox_pending_idx").on(t.createdAt).where(sql`${t.processedAt} is null`),
+    index("outbox_automation_pending_idx").on(t.createdAt).where(sql`${t.automationAt} is null`),
+  ],
 );
 
 /* ───────────────────────── Community (Iteration 4, RLS) ───────────────────────── */
@@ -1811,4 +1820,98 @@ export const kbChunks = pgTable(
     index("kb_chunks_entry_idx").on(t.entryId),
     index("kb_chunks_org_idx").on(t.orgId),
   ],
+);
+
+/* ───────────────────────── Analytics & automation (Iteration 9) ───────────────────────── */
+
+export const WORKFLOW_TRIGGERS = [
+  "workorder.created", "workorder.status_changed", "workorder.assigned", "workorder.sla_approaching", "workorder.sla_breached",
+  "complaint.created", "incident.created", "inspection.failed", "booking.created", "package.arrived", "document.uploaded", "schedule",
+] as const;
+export const WORKFLOW_RUN_STATUSES = ["running", "waiting_approval", "completed", "failed", "rejected"] as const;
+
+// WHEN trigger IF conditions THEN actions — runs with the owner's permissions, re-checked on every run
+export const workflows = pgTable(
+  "workflows",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }), // null = every property
+    name: text("name").notNull(),
+    description: text("description"),
+    triggerType: text("trigger_type").notNull(),
+    schedule: jsonb("schedule"), // { frequency, time, weekday?, dayOfMonth? } for schedule triggers, in the org's time zone
+    conditions: jsonb("conditions").notNull().default([]), // [{ field, op, value }] — all must match
+    actions: jsonb("actions").notNull().default([]), // [{ type, ...params }] — run in order
+    enabled: boolean("enabled").notNull().default(false),
+    ownerUserId: uuid("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    nextRunAt: ts("next_run_at"),
+    lastRunAt: ts("last_run_at"),
+    runCount: integer("run_count").notNull().default(0),
+    pausedReason: text("paused_reason"), // set when the engine stops a rule (e.g. it ran too often)
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("workflows_trigger_idx").on(t.orgId, t.triggerType).where(sql`${t.enabled}`),
+    index("workflows_schedule_idx").on(t.nextRunAt).where(sql`${t.enabled} and ${t.triggerType} = 'schedule'`),
+    check("workflows_trigger_ck", sql`${t.triggerType} in ('workorder.created','workorder.status_changed','workorder.assigned','workorder.sla_approaching','workorder.sla_breached','complaint.created','incident.created','inspection.failed','booking.created','package.arrived','document.uploaded','schedule')`),
+    check("workflows_schedule_ck", sql`(${t.triggerType} = 'schedule') = (${t.schedule} is not null)`),
+  ],
+);
+
+// one execution of a rule for one event (or one scheduled time); steps record what each action did
+export const workflowRuns = pgTable(
+  "workflow_runs",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
+    workflowVersion: integer("workflow_version").notNull(),
+    eventId: uuid("event_id"), // the outbox event that triggered it (idempotency key with workflow_id)
+    scheduledFor: ts("scheduled_for"), // schedule triggers: the slot this run covers (idempotency key with workflow_id)
+    triggerType: text("trigger_type").notNull(),
+    entityType: text("entity_type"),
+    entityId: uuid("entity_id"),
+    entityLabel: text("entity_label"),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("running"),
+    depth: integer("depth").notNull().default(0),
+    steps: jsonb("steps").notNull().default([]), // [{ index, type, label, status, summary, record?, error? }]
+    approvalRole: text("approval_role"), // waiting for someone with this role at the property
+    approvalStep: integer("approval_step"),
+    approvalRequestedAt: ts("approval_requested_at"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: ts("decided_at"),
+    decisionNote: text("decision_note"),
+    error: text("error"),
+    startedAt: ts("started_at").notNull().defaultNow(),
+    finishedAt: ts("finished_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("workflow_runs_event_uq").on(t.workflowId, t.eventId).where(sql`${t.eventId} is not null`),
+    uniqueIndex("workflow_runs_slot_uq").on(t.workflowId, t.scheduledFor).where(sql`${t.scheduledFor} is not null`),
+    index("workflow_runs_org_idx").on(t.orgId, t.createdAt),
+    index("workflow_runs_workflow_idx").on(t.workflowId, t.createdAt),
+    index("workflow_runs_waiting_idx").on(t.orgId, t.status).where(sql`${t.status} = 'waiting_approval'`),
+    index("workflow_runs_entity_idx").on(t.orgId, t.entityType, t.entityId),
+    check("workflow_runs_status_ck", sql`${t.status} in ('running','waiting_approval','completed','failed','rejected')`),
+  ],
+);
+
+// the daily operations brief delivered to one person on one local date (idempotent delivery + what they were sent)
+export const dailyBriefs = pgTable(
+  "daily_briefs",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    briefDate: date("brief_date").notNull(),
+    content: jsonb("content").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("daily_briefs_user_date_uq").on(t.orgId, t.userId, t.briefDate)],
 );

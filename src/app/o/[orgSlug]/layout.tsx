@@ -16,13 +16,14 @@ import { bookingStats } from "@/server/modules/amenities/service";
 import { visitorStats } from "@/server/modules/visitors/service";
 import { parkingStats } from "@/server/modules/parking/service";
 import { BRAND } from "@/config/brand";
+import { pendingApprovalsFor } from "@/server/automation/service";
 
 export default async function OrgLayout({ children, params }: LayoutProps<"/o/[orgSlug]">) {
   const { orgSlug } = await params;
   const { session, principal, ctx } = await getOrgContext(orgSlug);
   const resident = principal.role.category === "resident";
   // live counts for nav badges (each query is permission-scoped and cheap)
-  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview] = await Promise.all([
+  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview, approvals] = await Promise.all([
     unreadCount(ctx),
     messageBadgeCount(ctx),
     resident ? unreadAnnouncementCount(ctx) : Promise.resolve(0),
@@ -30,8 +31,9 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     !resident ? bookingStats(ctx).then((r) => r?.pending ?? 0) : Promise.resolve(0),
     !resident ? visitorStats(ctx).then((r) => r?.expectedToday ?? 0) : Promise.resolve(0),
     !resident ? parkingStats(ctx).then((r) => r?.review ?? 0) : Promise.resolve(0),
+    !resident ? pendingApprovalsFor(ctx).then((r) => r.length) : Promise.resolve(0),
   ]);
-  const badges: Record<string, number> = { messages, announcements, packages, bookings, visitors: visitorsOnSite, parking: parkingReview };
+  const badges: Record<string, number> = { messages, announcements, packages, bookings, visitors: visitorsOnSite, parking: parkingReview, approvals };
   const sections = visibleNav(principal.permissions, principal.role.category).map((s) => ({
     title: s.title,
     items: s.items.map((i) => ({ label: i.label, icon: i.icon, href: i.href(orgSlug), badge: i.badgeKey ? badges[i.badgeKey] : undefined })),
@@ -43,6 +45,9 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     ...(principal.permissions.has("workorder.read") ? [{ label: "Show overdue work orders", href: `${base}/maintenance?view=overdue`, group: "Action", keywords: "late sla breach" }] : []),
     ...(principal.permissions.has("task.manage") ? [{ label: "Create task", href: `${base}/tasks/new`, group: "Action", keywords: "new todo" }] : []),
     ...(principal.permissions.has("inspection.manage") ? [{ label: "Schedule inspection", href: `${base}/inspections/new`, group: "Action", keywords: "new checklist" }] : []),
+    ...(principal.permissions.has("analytics.read") ? [{ label: "Open analytics", href: `${base}/analytics`, group: "Action", keywords: "kpi metrics reports dashboard health score" },
+      { label: "Today's brief", href: `${base}/brief`, group: "Action", keywords: "daily brief morning briefing summary" }] : []),
+    ...(principal.permissions.has("automation.manage") ? [{ label: "New automation rule", href: `${base}/automations/new`, group: "Action", keywords: "workflow when if then rule trigger" }] : []),
     ...(principal.permissions.has("incident.create") ? [{ label: "Report incident", href: `${base}/incidents/new`, group: "Action", keywords: "new security damage injury" }] : []),
     ...(principal.permissions.has("complaint.create") || principal.permissions.has("complaint.manage") ? [{ label: "New complaint", href: `${base}/complaints/new`, group: "Action", keywords: "noise neighbour issue" }] : []),
     ...(principal.permissions.has("booking.create") || principal.permissions.has("booking.manage") ? [{ label: "Book an amenity", href: `${base}/amenities`, group: "Action", keywords: "party room gym reserve booking" }] : []),

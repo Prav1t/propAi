@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { withContext, type Tx } from "../../db/client";
 import {
   complaints, incidents, inspections, notificationPreferences, notifications, organizations, outboxEvents,
@@ -14,6 +14,8 @@ import { log } from "../../log";
 import { addTimeline } from "../ops/core";
 import { membershipUser, usersWithPermAt, vendorUsers } from "./recipients";
 import { communityDeliveries } from "./community";
+import { analyticsSettings } from "../../analytics/settings";
+import { activeOrgs } from "../../system-orgs";
 
 /* ───── catalogue ───── */
 
@@ -25,6 +27,7 @@ export const NOTIFICATION_KINDS = {
   "workorder.updated": { label: "Updates on my requests", emailDefault: true },
   "workorder.comment": { label: "New messages on requests I'm involved in", emailDefault: true },
   "workorder.sla_breached": { label: "Requests that miss their SLA", emailDefault: true },
+  "workorder.sla_approaching": { label: "Requests close to their resolution target", emailDefault: true },
   "task.assigned": { label: "Tasks assigned to me", emailDefault: false },
   "incident.reported": { label: "New incidents at my properties", emailDefault: false },
   "incident.escalated": { label: "Incidents escalated to high or critical", emailDefault: true },
@@ -42,6 +45,10 @@ export const NOTIFICATION_KINDS = {
   "parking.report": { label: "Parking reports and camera detections to review", emailDefault: false },
   "shift.handoff": { label: "Shift handoff notes for my shift", emailDefault: false },
   "asset.down": { label: "Equipment out of service at my properties", emailDefault: true },
+  "workflow.notice": { label: "Notices sent by automation rules", emailDefault: true },
+  "workflow.approval": { label: "Automation steps waiting for my approval", emailDefault: true },
+  "report.scheduled": { label: "Scheduled reports", emailDefault: true },
+  "brief.daily": { label: "My daily operations brief", emailDefault: true },
 } as const;
 export type NotificationKind = keyof typeof NOTIFICATION_KINDS;
 
@@ -99,6 +106,22 @@ async function deliveriesFor(tx: Tx, e: Event, base: string): Promise<Delivery[]
       if (!wo) return [];
       const ids = [...(await usersWithPermAt(tx, e.orgId, "workorder.manage", wo.propertyId, wo.buildingId)), ...(await membershipUser(tx, wo.assignedMembershipId))];
       return [{ userIds: ids, kind: "workorder.sla_breached", title: `Overdue: #${wo.number} ${wo.title}`, body: "This request has passed its resolution target.", href: `${base}/maintenance/${wo.id}`, entityType: "work_order", entityId: wo.id }];
+    }
+    case "workorder.sla_approaching": {
+      const [wo] = await tx.select().from(workOrders).where(eq(workOrders.id, p.workOrderId!));
+      if (!wo) return [];
+      const ids = [...(await usersWithPermAt(tx, e.orgId, "workorder.manage", wo.propertyId, wo.buildingId)), ...(await membershipUser(tx, wo.assignedMembershipId))];
+      return [{ userIds: ids, kind: "workorder.sla_approaching", title: `Due soon: #${wo.number} ${wo.title}`, body: "This request is close to its resolution target.", href: `${base}/maintenance/${wo.id}`, entityType: "work_order", entityId: wo.id }];
+    }
+    // automation rules, scheduled reports and the daily brief address people directly (resolved when the rule ran)
+    case "workflow.notify": {
+      const kind = (["workflow.notice", "workflow.approval", "report.scheduled"] as const).find((k) => k === p.kind) ?? "workflow.notice";
+      const ids = Array.isArray((e.payload as { userIds?: unknown }).userIds) ? ((e.payload as { userIds: unknown[] }).userIds.filter((x) => typeof x === "string") as string[]) : [];
+      return [{ userIds: ids, kind, title: String(p.title ?? "Automation notice"), body: p.body ?? null, href: `${base}${p.href ?? "/automations"}`, entityType: String(p.entityType ?? "workflow_run"), entityId: String(p.entityId ?? p.runId) }];
+    }
+    case "brief.ready": {
+      if (!p.userId) return [];
+      return [{ userIds: [p.userId], kind: "brief.daily", title: `Your daily brief — ${p.date}`, body: p.summary ?? null, href: `${base}/brief`, entityType: "daily_brief", entityId: p.briefId! }];
     }
     case "task.assigned": {
       const [t] = await tx.select().from(tasks).where(eq(tasks.id, p.taskId!));
@@ -224,6 +247,30 @@ export async function checkSlaBreaches(): Promise<number> {
     });
   }
   return due.length;
+}
+
+// warns once when an open request gets within the org's lead time of its resolution target (Iteration 9)
+export async function checkSlaApproaching(now = new Date()): Promise<number> {
+  const orgs = await activeOrgs();
+  let n = 0;
+  for (const o of orgs) {
+    const lead = analyticsSettings(o.settings).slaWarningMinutes;
+    const due = await withContext({ orgId: o.id, system: true }, (tx) => tx.select({ id: workOrders.id, resolveDueAt: workOrders.resolveDueAt }).from(workOrders)
+      .where(and(eq(workOrders.orgId, o.id), isNull(workOrders.slaWarnedAt), isNull(workOrders.slaBreachedAt), gte(workOrders.resolveDueAt, now), lt(workOrders.resolveDueAt, new Date(now.getTime() + lead * 60_000)),
+        inArray(workOrders.status, ["new", "acknowledged", "assigned", "scheduled", "in_progress", "awaiting_vendor", "awaiting_resident"])))
+      .limit(500));
+    for (const w of due) {
+      await withContext({ orgId: o.id, system: true }, async (tx) => {
+        const updated = await tx.update(workOrders).set({ slaWarnedAt: now }).where(and(eq(workOrders.id, w.id), isNull(workOrders.slaWarnedAt))).returning({ id: workOrders.id });
+        if (!updated.length) return;
+        const mins = Math.max(1, Math.round((w.resolveDueAt!.getTime() - now.getTime()) / 60_000));
+        await addTimeline(tx, { orgId: o.id, userId: null }, { entityType: "work_order", entityId: w.id, kind: "sla", body: `Resolution target in ${mins >= 90 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`}.`, visibility: "internal" });
+        await tx.insert(outboxEvents).values({ orgId: o.id, type: "workorder.sla_approaching", payload: { workOrderId: w.id, dueAt: w.resolveDueAt!.toISOString() } });
+        n++;
+      });
+    }
+  }
+  return n;
 }
 
 /* ───── inbox & preferences (user-facing) ───── */

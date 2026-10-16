@@ -76,6 +76,14 @@ describe("action tools offered per role", () => {
     expect(read("concierge")).toEqual(["search_knowledge", "retrieve_policy", "search_documents"]);
     expect(read("vendor")).toEqual([]);
   });
+  it("analytics tools go to roles with analytics access; the brief to managers", () => {
+    const a = (role: string) => toolsForPrincipal(principal(role)).map((t) => t.name).filter((n) => ["query_metrics", "compare_periods", "property_health", "daily_brief"].includes(n));
+    expect(a("property_manager")).toEqual(["query_metrics", "compare_periods", "property_health", "daily_brief"]);
+    expect(a("facility_manager")).toEqual(["query_metrics", "compare_periods", "property_health", "daily_brief"]);
+    expect(a("concierge")).toEqual([]);
+    expect(a("resident")).toEqual([]);
+    expect(a("maintenance_staff")).toEqual([]);
+  });
   it("vendors only act on work they can see", () => {
     const v = names("vendor");
     expect(v).not.toContain("create_work_order");

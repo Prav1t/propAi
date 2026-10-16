@@ -6,7 +6,9 @@ import { writeAudit } from "../audit";
 
 // passed as the first argument to every tenant-scoped service function.
 // `ai` is set when the assistant performs the change on the principal's behalf (after approval or under a policy).
-export type TenantCtx = { principal: Principal; meta: RequestMeta | null; ai?: { approvalId: string | null } };
+// `automation` is set when an automation rule performs it with its owner's permissions (Iteration 9).
+export type AutomationCause = { workflowId: string; runId: string; depth: number };
+export type TenantCtx = { principal: Principal; meta: RequestMeta | null; ai?: { approvalId: string | null }; automation?: AutomationCause };
 
 // all tenant queries run inside this: RLS pins the transaction to the principal's org
 export function tenantTx<T>(ctx: TenantCtx, fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -31,7 +33,7 @@ export async function auditAs(
 ): Promise<void> {
   await writeAudit(tx, {
     orgId: ctx.principal.orgId, actorUserId: ctx.principal.userId, action, entityType, entityId, before, after,
-    aiGenerated: !!ctx.ai, approvalId: ctx.ai?.approvalId ?? null,
+    aiGenerated: !!ctx.ai, approvalId: ctx.ai?.approvalId ?? null, workflowRunId: ctx.automation?.runId ?? null,
   }, ctx.meta);
 }
 

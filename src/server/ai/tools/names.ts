@@ -6,6 +6,8 @@ export const TOOL_NAMES = [
   "whos_on_shift", "shift_summary", "ops_kpis", "calendar_range", "recent_announcements",
   // knowledge (Iteration 8): passages from documents and the knowledge base, with citations
   "search_knowledge", "retrieve_policy", "search_documents",
+  // analytics (Iteration 9): numbers from the shared metric catalog, health scores and the daily brief
+  "query_metrics", "compare_periods", "property_health", "daily_brief",
   // actions (Iteration 7): prepared as plans, run after approval or when a policy allows
   "create_work_order", "assign_work_order", "update_work_order_status", "comment_on_work_order", "create_task", "schedule_inspection",
   "create_booking", "cancel_booking", "log_package", "register_visitor", "create_incident", "send_announcement", "message_resident",

@@ -9,12 +9,13 @@ import { FilterBar } from "@/components/ui/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
 import { LinkTabs } from "@/components/ui/tabs";
 import { PRIORITY, WO_CATEGORY, WO_STATUS } from "@/lib/ops-labels";
-import { fmtDateTime, relative } from "@/lib/time";
+import { fmtDateTime, relative, zonedToUtc } from "@/lib/time";
+import { getAnalyticsSettings } from "@/server/analytics/settings";
 
 export const metadata = { title: "Maintenance" };
 
 const STAFF_VIEWS: { key: WoView; label: string }[] = [
-  { key: "open", label: "Open" }, { key: "overdue", label: "Overdue" }, { key: "emergency", label: "Emergency" }, { key: "unassigned", label: "Unassigned" },
+  { key: "open", label: "Open" }, { key: "overdue", label: "Overdue" }, { key: "due_soon", label: "Due soon" }, { key: "emergency", label: "Emergency" }, { key: "unassigned", label: "Unassigned" },
   { key: "mine", label: "Assigned to me" }, { key: "completed", label: "Completed" }, { key: "all", label: "All" },
 ];
 const OTHER_VIEWS: { key: WoView; label: string }[] = [{ key: "open", label: "Open" }, { key: "completed", label: "Completed" }, { key: "all", label: "All" }];
@@ -26,8 +27,10 @@ export default async function MaintenancePage({ params, searchParams }: PageProp
   const staff = principal.permissions.has("workorder.read");
   const views = staff ? STAFF_VIEWS : OTHER_VIEWS;
   const view = (views.find((v) => v.key === sp(q.view))?.key ?? "open") as WoView;
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(sp(q.since) ?? "") ? zonedToUtc(`${sp(q.since)}T00:00`, principal.orgTimezone) : undefined;
   const data = await orNotFound(listWorkOrders(ctx, {
-    view, status: sp(q.status), propertyId: sp(q.property), category: sp(q.category), priority: sp(q.priority), q: sp(q.q), page: Number(sp(q.page)) || 1,
+    view, status: sp(q.status), propertyId: sp(q.property), buildingId: sp(q.building), category: sp(q.category), priority: sp(q.priority), q: sp(q.q), page: Number(sp(q.page)) || 1,
+    since, dueWithinMinutes: view === "due_soon" ? (await getAnalyticsSettings(ctx)).slaWarningMinutes : undefined,
   }));
   const props = staff ? await listPropertyOptions(ctx) : [];
   const base = `/o/${orgSlug}/maintenance`;

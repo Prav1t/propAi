@@ -10,6 +10,7 @@ import { searchVisitors, shiftSummary, whosOnShift } from "./frontdesk";
 import { calendarRange, opsKpis, searchComplaints, searchIncidents, searchInspections, searchTasks } from "./ops";
 import { assetHistory } from "./facility";
 import { retrievePolicyTool, searchDocumentsTool, searchKnowledgeTool } from "./knowledge";
+import { comparePeriods, dailyBriefTool, propertyHealthTool, queryMetrics } from "./analytics";
 import { assignWorkOrderAction, commentOnWorkOrderAction, createWorkOrderAction, updateWorkOrderStatusAction } from "./actions-maintenance";
 import { createIncidentAction, createTaskAction, scheduleInspectionAction } from "./actions-ops";
 import { cancelBookingAction, createBookingAction, logPackageAction, messageResidentAction, registerVisitorAction, sendAnnouncementAction } from "./actions-community";
@@ -20,6 +21,7 @@ export const ALL_TOOLS: ToolDef[] = [
   searchBookings, checkAmenityAvailability, searchPackages, searchVisitors, searchIncidents, searchComplaints, searchTasks, searchInspections,
   assetHistory, whosOnShift, shiftSummary, opsKpis, calendarRange, recentAnnouncements,
   searchKnowledgeTool, retrievePolicyTool, searchDocumentsTool,
+  queryMetrics, comparePeriods, propertyHealthTool, dailyBriefTool,
   createWorkOrderAction, assignWorkOrderAction, updateWorkOrderStatusAction, commentOnWorkOrderAction, createTaskAction, scheduleInspectionAction,
   createBookingAction, cancelBookingAction, logPackageAction, registerVisitorAction, createIncidentAction, sendAnnouncementAction, messageResidentAction,
 ] as ToolDef[];

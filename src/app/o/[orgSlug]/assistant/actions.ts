@@ -49,8 +49,8 @@ async function planAction(raw: { orgSlug: string; planId: string }, run: (ctx: A
     const plan = await run(ctx, ids.data.planId);
     // deliver the notifications the approved changes emitted, after the response
     after(async () => {
-      const { drainOutbox } = await import("@/server/modules/notifications/service");
-      await drainOutbox().catch(() => {});
+      const { afterChange } = await import("@/server/after-change");
+      await afterChange();
     });
     revalidatePath(`/o/${ids.data.orgSlug}/assistant`);
     return { ok: true, plan };

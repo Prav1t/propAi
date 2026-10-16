@@ -8,7 +8,7 @@ import { ago, fmtWhen, label, lim, limitArg, locationArg, placeFilter, where } f
 import { isErr, resolveUnit, resolveVendor } from "./resolve";
 
 const VIEW_LABEL: Record<WoView, string> = {
-  open: "open", overdue: "overdue", emergency: "open emergency", unassigned: "unassigned", mine: "open (assigned to you)", completed: "completed", all: "",
+  open: "open", overdue: "overdue", due_soon: "due soon", emergency: "open emergency", unassigned: "unassigned", mine: "open (assigned to you)", completed: "completed", all: "",
 };
 
 export const searchWorkOrders = defineTool({

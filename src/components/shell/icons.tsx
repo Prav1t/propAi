@@ -37,6 +37,8 @@ const paths: Record<string, string> = {
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5M19 19v2H6M8 7h7M8 11h5",
   flag: "M4 22V4M4 4h12l-2 4 2 4H4",
   chevrons: "m7 15 5 5 5-5M7 9l5-5 5 5",
+  chart: "M3 3v18h18M7 15l4-4 3 3 5-6",
+  bolt: "M13 2 4 14h7l-1 8 9-12h-7z",
 };
 
 export function Icon({ name, className = "size-4" }: { name: string; className?: string }) {

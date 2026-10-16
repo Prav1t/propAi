@@ -7,6 +7,7 @@ import { seedCommunity, seedFile } from "./seed-community";
 import { EXTRA_STAFF_DOMAIN, seedFacility, seedFacilityTenant } from "./seed-facility";
 import { seedAi } from "./seed-ai";
 import { seedKnowledge } from "./seed-knowledge";
+import { seedAutomation } from "./seed-automation";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -266,6 +267,13 @@ async function main() {
     const nsFile = await seedFile(tx, ns.id, "document", nsDoc.id, "bylaws.txt", new TextEncoder().encode("Lonsdale Quay Lofts bylaws\n"), "text/plain");
     await tx.insert(s.documentVersions).values({ orgId: ns.id, documentId: nsDoc.id, version: 1, fileId: nsFile.id });
     await seedFacilityTenant(tx, { orgId: ns.id, propertyId: nsProp.id, buildingId: nsBld.id, unitId: nsUnit.id, membershipId: nsAdmin.id, userId: nsUser });
+    // automation rows in the second tenant too (Iteration 9)
+    const [nsWf] = await tx.insert(s.workflows).values({
+      orgId: ns.id, name: "New complaints", triggerType: "complaint.created", conditions: [], enabled: false, ownerUserId: nsUser, createdByUserId: nsUser,
+      actions: [{ type: "notify", to: { roles: ["org_admin"], members: [], onCall: false, submitter: false, assignee: false }, title: "New complaint {{ref}}", message: "" }],
+    }).returning();
+    await tx.insert(s.workflowRuns).values({ orgId: ns.id, workflowId: nsWf.id, workflowVersion: 1, triggerType: "complaint.created", status: "completed", steps: [], finishedAt: new Date() });
+    await tx.insert(s.dailyBriefs).values({ orgId: ns.id, userId: nsUser, briefDate: "2026-10-01", content: { summary: "Nothing urgent." } });
 
     const ops = await seedOps(tx, pac.id);
     console.log(`✓ operations: ${ops.workOrders} work orders, ${ops.tasks} tasks, ${ops.inspections} inspections, ${ops.incidents} incidents, ${ops.complaints} complaints`);
@@ -279,6 +287,8 @@ async function main() {
   // after the commit: the knowledge base and the assistant run through the app's own connection and permission checks
   const kb = await seedKnowledge();
   console.log(`✓ knowledge base: ${kb.entries} entries, ${kb.sources} sources indexed into ${kb.passages} passages`);
+  const auto = await seedAutomation();
+  console.log(`✓ automation: ${auto.rules} rules, ${auto.runs} runs`);
   const ai = await seedAi();
   console.log(`✓ assistant: ${ai.conversations} conversations, ${ai.toolCalls} tool calls, ${ai.plans} plans (demo model)`);
 }

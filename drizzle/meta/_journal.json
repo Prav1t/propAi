@@ -127,6 +127,20 @@
       "when": 1791262243715,
       "tag": "0017_rls_knowledge",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792054569012,
+      "tag": "0018_analytics_automation",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792054580727,
+      "tag": "0019_rls_automation",
+      "breakpoints": true
     }
   ]
 }

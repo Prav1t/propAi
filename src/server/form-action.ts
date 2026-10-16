@@ -6,6 +6,7 @@ import type { z } from "zod";
 import { getOrgContext } from "./org-context";
 import { toActionError, zodFieldErrors, type ActionState } from "./actions";
 import type { TenantCtx } from "./modules/context";
+import { afterChange } from "./after-change";
 
 // every string field except secrets, echoed back so the form keeps input on error
 function echo(fd: FormData): Record<string, string> {
@@ -33,13 +34,8 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
     return toActionError(e, values);
   }
   // deliver notifications for whatever this change emitted, without delaying the response
-  after(async () => {
-    const { drainOutbox } = await import("./modules/notifications/service");
-    await drainOutbox().catch(() => {});
-    // documents and knowledge entries queued for the assistant's index are processed right away (the worker also polls)
-    const { processIndexQueue } = await import("./kb/indexer");
-    await processIndexQueue().catch(() => {});
-  });
+  // and run automation rules on the events it raised (see after-change.ts)
+  after(() => afterChange({ index: true }));
   const d = opts.done(result);
   for (const p of d.revalidate ?? [`/o/${opts.orgSlug}`]) revalidatePath(p, "layout");
   if (d.redirectTo) redirect(d.redirectTo);

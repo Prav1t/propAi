@@ -22,6 +22,10 @@
   --color-success-soft: #eaf6ef;
   --color-warning: #a35b00;
   --color-warning-soft: #fdf4e6;
+  /* charts: categorical slots validated for CVD and contrast on the surface (light and dark selected separately) */
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-grid: #ececee;
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -47,7 +51,16 @@
     --color-success-soft: #14301f;
     --color-warning: #f0b35a;
     --color-warning-soft: #33250f;
+    --color-series-1: #3987e5;
+    --color-series-2: #d95926;
+    --color-grid: #26262b;
   }
+}
+
+/* reports print as plain tables: no navigation, no buttons */
+@media print {
+  [data-print-hide] { display: none !important; }
+  body { background: #fff; color: #000; }
 }
 
 html,

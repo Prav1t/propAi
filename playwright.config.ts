@@ -3,6 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 // E2E runs against the dev server + the seeded development database (npm run db:reset first for a clean slate)
 export default defineConfig({
   testDir: "tests/e2e",
+  // compiles every route on the dev server before the tests (see the file)
+  globalSetup: "./tests/e2e/global-setup.ts",
   timeout: 60_000,
   // the dev server compiles a route on first visit, which can take a few seconds
   expect: { timeout: 10_000 },

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
   assets, buildings, files, membershipScopes, memberships, properties, roles, slaPolicies, triageRules, units, users,
@@ -76,7 +76,7 @@ export const canListWorkOrders = (p: Principal) =>
 
 /* ───────────── list ───────────── */
 
-export type WoView = "open" | "overdue" | "emergency" | "unassigned" | "mine" | "completed" | "all";
+export type WoView = "open" | "overdue" | "due_soon" | "emergency" | "unassigned" | "mine" | "completed" | "all";
 
 export type WoListRow = {
   id: string; number: number; title: string; status: string; priority: string; isEmergency: boolean; category: string;
@@ -84,7 +84,11 @@ export type WoListRow = {
   assigneeName: string | null; vendorName: string | null; resolveDueAt: Date | null; createdAt: Date; overdue: boolean;
 };
 
-export type WoListOpts = { view?: WoView; status?: string; propertyId?: string; buildingId?: string; unitId?: string; category?: string; priority?: string; vendorId?: string; q?: string; page?: number; pageSize?: number };
+export type WoListOpts = {
+  view?: WoView; status?: string; propertyId?: string; buildingId?: string; unitId?: string; category?: string; priority?: string; vendorId?: string; q?: string; page?: number; pageSize?: number;
+  dueWithinMinutes?: number; // "due soon": open and due within this many minutes (the org's approaching-SLA lead time)
+  since?: Date; // created on or after
+};
 
 // the filter behind the work order list (and its per-property counts): visibility first, then the requested view
 function woListWhere(p: Principal, opts: WoListOpts, now: Date): SQL | undefined {
@@ -92,6 +96,7 @@ function woListWhere(p: Principal, opts: WoListOpts, now: Date): SQL | undefined
   const viewCond: Record<WoView, SQL | undefined> = {
     open: inArray(workOrders.status, OPEN_STATUSES),
     overdue: and(inArray(workOrders.status, OPEN_STATUSES), lt(workOrders.resolveDueAt, now)),
+    due_soon: and(inArray(workOrders.status, OPEN_STATUSES), gte(workOrders.resolveDueAt, now), lt(workOrders.resolveDueAt, new Date(now.getTime() + (opts.dueWithinMinutes ?? 120) * 60_000))),
     emergency: and(inArray(workOrders.status, OPEN_STATUSES), eq(workOrders.isEmergency, true)),
     unassigned: and(inArray(workOrders.status, OPEN_STATUSES), isNull(workOrders.assignedMembershipId), isNull(workOrders.vendorId)),
     mine: and(inArray(workOrders.status, OPEN_STATUSES), or(eq(workOrders.assignedMembershipId, p.membershipId), p.vendorId ? eq(workOrders.vendorId, p.vendorId) : undefined)),
@@ -111,6 +116,7 @@ function woListWhere(p: Principal, opts: WoListOpts, now: Date): SQL | undefined
     opts.category ? eq(workOrders.category, opts.category) : undefined,
     opts.priority ? eq(workOrders.priority, opts.priority) : undefined,
     opts.vendorId ? eq(workOrders.vendorId, opts.vendorId) : undefined,
+    opts.since ? gte(workOrders.createdAt, opts.since) : undefined,
     q ? (Number.isInteger(num) && num > 0 ? eq(workOrders.number, num) : ilike(workOrders.title, `%${q.replace(/[%_\\]/g, "\\$&")}%`)) : undefined,
   );
 }
@@ -515,12 +521,30 @@ export async function updateWorkOrderDetails(ctx: TenantCtx, id: string, input: 
     const due = priority !== before.priority ? dueDates(before.createdAt, await loadSla(tx, p.orgId, before.propertyId, priority)) : null;
     const [after] = await tx.update(workOrders).set({
       title: input.title, description: input.description, category: input.category, priority, isEmergency: input.isEmergency,
-      ...(due ? { respondDueAt: due.respondDueAt, resolveDueAt: due.resolveDueAt, slaBreachedAt: null } : {}),
+      ...(due ? { respondDueAt: due.respondDueAt, resolveDueAt: due.resolveDueAt, slaBreachedAt: null, slaWarnedAt: null } : {}),
     }).where(eq(workOrders.id, id)).returning();
     const changes = (["title", "category", "priority", "isEmergency"] as const).filter((k) => before[k] !== after[k]).map((k) => `${k} → ${String(after[k])}`);
     if (changes.length) await addTimeline(tx, ctx, { entityType: "work_order", entityId: id, kind: "updated", visibility: "internal", body: `Updated ${changes.join(", ")}.` });
     await auditAs(tx, ctx, "work_order.updated", "work_order", id, before, after);
     return after;
+  });
+}
+
+// priority only (automation rules and escalation); SLA targets are recalculated from the original submission time
+export async function setWorkOrderPriority(ctx: TenantCtx, id: string, priority: Priority, note?: string | null) {
+  const p = ctx.principal;
+  return tenantTx(ctx, async (tx) => {
+    const before = await loadWo(tx, p.orgId, id);
+    const access = woAccess(p, before);
+    if (!access.manage) throw canSeeWo(access) ? new ForbiddenError() : new NotFoundError();
+    if (before.priority === priority) return { workOrder: before, changed: false };
+    if (!isOpen(before.status)) throw new ValidationError("This request is no longer open.");
+    const due = dueDates(before.createdAt, await loadSla(tx, p.orgId, before.propertyId, priority));
+    const [after] = await tx.update(workOrders).set({ priority, respondDueAt: due.respondDueAt, resolveDueAt: due.resolveDueAt, slaBreachedAt: null, slaWarnedAt: null })
+      .where(eq(workOrders.id, id)).returning();
+    await addTimeline(tx, ctx, { entityType: "work_order", entityId: id, kind: "updated", visibility: "internal", body: `Priority ${before.priority} → ${priority}.${note ? ` ${note}` : ""}` });
+    await auditAs(tx, ctx, "work_order.updated", "work_order", id, { priority: before.priority }, { priority, resolveDueAt: after.resolveDueAt });
+    return { workOrder: after, changed: true };
   });
 }
 

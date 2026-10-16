@@ -10,6 +10,7 @@ import { fileRows, prepareFiles, withStoredBlobs } from "../../files/service";
 import { DOCUMENT_TYPES } from "../../files/sniff";
 import { canManageDocument, canReadDocument, documentVisibleWhere } from "./access";
 import { queueIndex } from "../../kb/indexer";
+import { emit } from "../ops/core";
 
 type DocRow = typeof documents.$inferSelect;
 
@@ -117,6 +118,7 @@ export async function createDocument(ctx: TenantCtx, input: DocumentInput, uploa
     await tx.insert(documentVersions).values({ orgId: p.orgId, documentId: d.id, version: 1, fileId: f.id, notes: input.notes, uploadedByUserId: p.userId });
     await queueIndex(tx, { orgId: p.orgId, documentId: d.id, version: 1 }); // the assistant can answer from it once indexed
     await auditAs(tx, ctx, "document.created", "document", d.id, undefined, { title: d.title, audience: d.audience, file: f.filename });
+    await emit(tx, ctx, "document.uploaded", { documentId: d.id, version: 1 });
     return d;
   }));
 }
@@ -137,6 +139,7 @@ export async function addDocumentVersion(ctx: TenantCtx, id: string, upload: Fil
     await tx.update(documents).set({ currentVersion: version }).where(eq(documents.id, d.id));
     await queueIndex(tx, { orgId: p.orgId, documentId: d.id, version }); // older versions' passages are replaced
     await auditAs(tx, ctx, "document.version_added", "document", d.id, { version: d.currentVersion }, { version, file: f.filename });
+    await emit(tx, ctx, "document.uploaded", { documentId: d.id, version });
     return version;
   }));
 }

@@ -92,7 +92,9 @@ export function capabilities(h: ChatHints, available: ReadonlySet<string>): stri
         available.has("create_work_order") && available.has("assign_work_order") && "Create a work order for the broken elevator in Tower B and assign Summit Elevator",
         available.has("send_announcement") && "Send residents of Fraser Towers a notice saying the pool will be closed tomorrow",
         available.has("log_package") && "A package arrived for unit 1204 in Tower A",
-        available.has("ops_kpis") && "Give me my morning briefing",
+        (available.has("daily_brief") || available.has("ops_kpis")) && "Give me my morning briefing",
+        available.has("compare_periods") && "How much did maintenance spending change this quarter?",
+        available.has("property_health") && "Which property needs the most attention?",
       ].filter((x): x is string => !!x);
   const acts = [...available].some((n) => (ACTION_TOOL_NAMES as readonly string[]).includes(n));
   return `I can look up live records you have access to${acts ? " and prepare changes for you to approve — nothing changes until you click Approve" : ""}. Try:\n${ex.map((e) => `- ${e}`).join("\n")}`;
@@ -142,7 +144,7 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
     return tools([{ name: "search_documents", input: { ...(category ? { category } : {}), ...loc } }]);
   }
   // (questions about people — numbers, emails, who lives where — go to the directory rules further down, not documents)
-  if (KNOWLEDGE.test(t) && !/\b(emergency (number|contact|phone)|office hours|phone|email|who lives|contact details)\b/.test(t)) {
+  if (KNOWLEDGE.test(t) && !/\b(emergency (number|contact|phone)|office hours|phone|email|who lives|contact details)\b/.test(t) && !/\b(average|avg|resolution time|response time|how many|trend\w*|rate)\b/.test(t)) {
     if (!has("search_knowledge")) return { kind: "reply", text: refusal("your organization's documents") };
     return tools([{ name: "search_knowledge", input: { question: text, ...(location && !h.resident ? { location } : {}) } }]);
   }
@@ -150,6 +152,13 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
   const woNumber = text.match(/\b(?:wo|work\s*order|request|ticket|job)\s*(?:#|no\.?|number)?\s*-?\s*(\d{1,7})\b/i);
   if (woNumber) return tools([{ name: "get_work_order", input: { number: Number(woNumber[1]) } }]);
 
+  // numbers about the operation come from the metric catalog (analytics tools), never from listing records
+  const analytics = !h.resident ? planAnalytics(text, t, has, range, loc) : null;
+  if (analytics) return analytics;
+
+  if (/\b(briefing|brief me|daily brief|morning report|what do i need to know today|what('s| is) (urgent|on my plate) today)\b/.test(t) && has("daily_brief")) {
+    return tools([{ name: "daily_brief", input: {} }]);
+  }
   if (/\b(briefing|brief me|kpis?|metrics|dashboard|how are (we|things) (doing|going)|overview|status report|morning report|operations summary|ops summary|stats|statistics)\b/.test(t)) {
     if (h.resident) return { kind: "reply", text: capabilities(h, available) };
     return tools([
@@ -293,4 +302,70 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
     return tools([{ name: "search_knowledge", input: { question: text, ...(location && !h.resident ? { location } : {}) } }]);
   }
   return { kind: "reply", text: `I'm running in demo mode without a language model, so I only understand a fixed set of questions. ${capabilities(h, available)}` };
+}
+
+/* ───────────── analytics questions (Iteration 9) ───────────── */
+
+type Range = ReturnType<typeof parseDateRange>;
+
+// which catalog metric a question is about (most specific first)
+export function metricFor(t: string): string | undefined {
+  if (/\b(spend\w*|costs?|expenses?|money)\b/.test(t)) return "maintenance_spend";
+  if (/\b(serious|critical|high[- ]severity)\b.*\bincidents?\b/.test(t)) return "serious_incidents";
+  if (/\bincidents?\b/.test(t)) return "incidents_reported";
+  if (/\bcomplain\w*\b.*\b(resolve|resolution|fix)\w*\b/.test(t)) return "complaint_resolution_hours";
+  if (/\bcomplain\w*\b/.test(t)) return "complaints_created";
+  if (/\bdowntime\b/.test(t)) return "downtime_hours";
+  if (/\binspections?\b.*\b(fail\w*)\b|\bfail\w* inspections?\b/.test(t)) return "inspection_failure_rate";
+  if (/\b(pick ?up time|time to pick ?up|picked up)\b/.test(t)) return "package_pickup_hours";
+  if (/\bpackages?\b/.test(t)) return "packages_received";
+  if (/\b(bookings?|reservations?)\b/.test(t)) return "amenity_bookings";
+  if (/\b(sla|on time|within (target|sla)|met (the|their) target)\b/.test(t)) return "sla_compliance";
+  if (/\b(response time|respond\w*|first response)\b/.test(t)) return "first_response_hours";
+  if (/\b(resolution time|time to (fix|resolve|complete|close)|resolve\w*|fix\w*)\b/.test(t)) return "resolution_hours";
+  if (/\b(backlog|open requests?|still open)\b/.test(t)) return "open_backlog";
+  if (/\btasks?\b.*\b(done|completed|finished)\b/.test(t)) return "tasks_completed";
+  if (/\b(requests?|work ?orders?|tickets?|repairs?|maintenance)\b/.test(t)) return /\b(completed|closed|finished|resolved)\b/.test(t) ? "requests_completed" : "requests_created";
+  return undefined;
+}
+
+function presetFor(t: string): string | undefined {
+  if (/\bthis quarter\b|\bquarter to date\b/.test(t)) return "qtd";
+  if (/\bthis month\b|\bmonth to date\b/.test(t)) return "mtd";
+  if (/\bthis year\b|\byear to date\b/.test(t)) return "ytd";
+  if (/\b(this|past|last) week\b|\blast 7 days\b/.test(t)) return "7d";
+  if (/\b(last|past) (3 months|90 days|quarter)\b/.test(t)) return "90d";
+  if (/\b(last|past) (year|12 months)\b/.test(t)) return "365d";
+  return undefined;
+}
+
+function breakdownFor(t: string, metric: string): string | undefined {
+  if (/\b(which|what|each|per|by) (property|properties|building site)\b|\bhighest .* (at|by) property\b|\bproperty has\b/.test(t)) return "property";
+  if (/\b(which|each|per|by) buildings?\b|\bbuilding has\b/.test(t)) return "building";
+  if (/\b(most common|what kinds?|which kinds?|types? of|by (category|type)|what (are|were) .* about|categor(y|ies))\b/.test(t)) return metric.startsWith("incident") || metric === "serious_incidents" ? "type" : metric === "amenity_bookings" ? "amenity" : metric.startsWith("package") ? "carrier" : "category";
+  if (/\b(which|each|per|by) amenit(y|ies)\b/.test(t)) return "amenity";
+  return undefined;
+}
+
+function planAnalytics(text: string, t: string, has: (n: ToolName) => boolean, range: Range, loc: { location?: string }): DemoPlan | null {
+  if (/\b(vendors?|contractors?)\b/.test(t)) return null; // vendor_performance answers these
+  if (/\b(health score|how healthy|property health|healthiest|least healthy|needs? (the most )?attention)\b/.test(t)) {
+    return has("property_health") ? { kind: "tools", calls: [{ name: "property_health", input: { ...loc } }] } : null;
+  }
+  const numeric = /\b(how (much|many)|average|avg|mean|rate|percent\w*|%|trend\w*|volume|spend\w*|costs?|expenses?|most common|highest|lowest|most|fewest|top|compar\w*|change[ds]?|increas\w*|decreas\w*|grew|growth|up or down|vs\.?|versus)\b/.test(t);
+  if (!numeric) return null;
+  if (/\b(waiting|right now|on site|here now|today)\b/.test(t) && /\b(packages?|visitors?|guests?)\b/.test(t)) return null; // live lists
+  if (/\boverdue\b/.test(t) && !/\b(rate|percent|trend|average)\b/.test(t)) return null; // listing overdue work answers this
+  const metric = metricFor(t);
+  if (!metric) return null;
+  const change = /\b(compar\w*|change[ds]?|increas\w*|decreas\w*|grew|growth|up or down|vs\.?|versus|than last)\b/.test(t);
+  const preset = presetFor(t);
+  if (change && has("compare_periods")) {
+    const comparison = preset === "qtd" || /\bquarter\b/.test(t) ? "quarter" : preset === "mtd" || /\bmonth\b/.test(t) ? "month" : preset === "7d" || /\bweek\b/.test(t) ? "7d" : "30d";
+    return { kind: "tools", calls: [{ name: "compare_periods", input: { metric, comparison, ...loc } }] };
+  }
+  if (!has("query_metrics")) return null;
+  const breakdown = breakdownFor(t, metric);
+  const explicit = range && range.from !== range.to && !preset ? { from: range.from, to: range.to } : {};
+  return { kind: "tools", calls: [{ name: "query_metrics", input: { metrics: [metric], ...(preset && !explicit.from ? { period: preset } : {}), ...explicit, ...(breakdown ? { breakdown } : {}), ...loc } }] };
 }

@@ -13,6 +13,8 @@ export const NAV: NavSection[] = [
   { items: [
     { label: "Dashboard", href: (s) => `/o/${s}/dashboard`, icon: "home" },
     { label: "Assistant", href: (s) => `/o/${s}/assistant`, anyOf: ["ai.use"], icon: "sparkle" },
+    { label: "Analytics", href: (s) => `/o/${s}/analytics`, anyOf: ["analytics.read"], icon: "chart" },
+    { label: "Automations", href: (s) => `/o/${s}/automations`, anyOf: ["automation.manage"], icon: "bolt", badgeKey: "approvals" },
   ] },
   {
     title: "Operations",
@@ -64,6 +66,7 @@ export const NAV: NavSection[] = [
       { label: "Members", href: (s) => `/o/${s}/settings/members`, anyOf: ["member.read"], icon: "users" },
       { label: "Maintenance rules", href: (s) => `/o/${s}/settings/maintenance`, anyOf: ["workorder.configure"], icon: "sliders" },
       { label: "AI assistant", href: (s) => `/o/${s}/settings/ai`, anyOf: ["ai.settings.manage"], icon: "sparkle" },
+      { label: "Analytics & automation", href: (s) => `/o/${s}/settings/analytics`, anyOf: ["org.settings.manage"], icon: "chart" },
       { label: "Roles", href: (s) => `/o/${s}/settings/roles`, anyOf: ["role.read"], icon: "shield" },
       { label: "Audit log", href: (s) => `/o/${s}/settings/audit`, anyOf: ["audit.read"], icon: "list" },
     ],

@@ -66,8 +66,8 @@ export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assista
         /* already closed */
       }
       // a policy may have let a change run during the turn: deliver the notifications it emitted
-      const { drainOutbox } = await import("@/server/modules/notifications/service");
-      await drainOutbox().catch(() => {});
+      const { afterChange } = await import("@/server/after-change");
+      await afterChange();
     },
     async cancel() {
       await gen.return(undefined);
