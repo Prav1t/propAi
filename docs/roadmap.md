@@ -1,0 +1,39 @@
+# Implementation Roadmap
+
+Each iteration must end runnable, building, tested, documented, with demo data. Status is updated at the end of every iteration.
+
+| # | Iteration | Status | Exit criteria (summary) |
+|---|---|---|---|
+| 0 | Discovery + architecture | ✅ Done | Research, requirements, architecture, AI architecture, schema, roadmap docs |
+| 1 | Application foundation | ✅ Done | Register → verify → create org → enter; login with MFA; invitations; RBAC + scopes; RLS tenant isolation proven by tests; settings; audit log; seed; Docker |
+| 2 | Property / portfolio core | ✅ Done | CRUD for portfolios, properties, buildings, floors, units, residents (occupancy), staff, vendors; search + filters; detail pages; Cmd/Ctrl-K navigation |
+| 3 | Operations core | ✅ Done | Maintenance state machine + SLA, vendor assignment + vendor portal, tasks, inspections (templates, checklists), incidents, complaints; outbox events; notifications (in-app + email) |
+| 4 | Community + resident experience | ✅ Done | Resident dashboard (mobile-first), amenities + booking rules engine, packages, announcements, messaging, documents + file storage |
+| 5 | Concierge + facility | ✅ Done | Concierge console, visitors + QR passes, parking permits/violations, shifts + handoff notes, assets, preventive maintenance, downtime |
+| 6 | AI foundation | ✅ Done | Provider abstraction (Anthropic, OpenAI, compatible, demo), 22 read-only permission-filtered tools, orchestrator, private conversations, tool-call log, usage + caps, chat UI with status states, eval suite |
+| 7 | Agentic AI | ✅ Done | 13 action tools (prepare → execute → verify), policy engine (org + property rules, risk classes, hard limits), approval plans with Approve / Edit / Cancel, re-authorization, AI-marked audit, tone-aware drafts, demo-mode actions, eval cases for actions |
+| 8 | RAG + knowledge base | ✅ Done | pgvector passages from documents (PDF, Word, text) and versioned knowledge entries, indexing queue, embedding providers (+ offline demo embedder), permission-aware hybrid retrieval, cited answers, knowledge base admin with index status and "try a question", policy grounding for actions |
+| 9 | Analytics + automation | ✅ Done | Metric catalog (24 metrics, SQL, scoped), analytics page with accessible charts, 10 reports + CSV + print, explainable property health score, workflow engine (11 event triggers + schedules, conditions, 10 actions, role-based approvals, loop protection, idempotent runs), rule builder with dry run and run log, "due soon" SLA warnings, daily brief, insights, assistant analytics tools |
+| 10 | Billing + integrations | ⏭ Next | Config-driven plans, trial, mock + Stripe billing adapter, API keys, versioned REST API docs, outgoing webhooks (HMAC, retries, SSRF-safe) |
+| 11 | Security hardening | | Threat model review, pen-test style tests, SSO/OAuth, org-enforced MFA, privacy export/deletion, rate limits on Redis |
+| 12 | UX polish | | Loading/empty/error states, accessibility audit, mobile passes, PWA, voice input |
+| 13 | Production readiness | | Prod Docker, migrations runbook, backups, monitoring, deployment guide |
+
+Iteration reports: [1](iterations/iteration-01.md) · [2](iterations/iteration-02.md) · [3](iterations/iteration-03.md) · [4](iterations/iteration-04.md) · [5](iterations/iteration-05.md) · [6](iterations/iteration-06.md) · [7](iterations/iteration-07.md) · [8](iterations/iteration-08.md) · [9](iterations/iteration-09.md)
+
+## Iteration 10 — detailed plan (billing + integrations)
+
+Vertical slice first: **a new organization starts a 14-day trial on the Professional plan → the admin sees usage against the plan's limits (units, staff seats, AI requests) → upgrades through the billing provider (mock in development, Stripe when keys are set) → the subscription, invoice and usage records update from the provider's webhook → an admin creates an API key and a webhook endpoint → creating a work order through `POST /api/v1/work-orders` delivers a signed `workorder.created` webhook to their endpoint, retried with backoff until it succeeds, with every attempt visible.**
+
+1. **Plans as configuration** (`src/config/plans.ts` + a `plans` table for overrides): Starter / Professional / Enterprise with prices per billing dimension (properties, units, staff seats, AI requests, optional modules), limits and included features. Nothing about pricing is hard-coded in pages or services; feature checks go through one `entitlements(org)` function.
+2. **Subscriptions and trials:** `subscriptions` (plan, status trialing/active/past_due/cancelled, period dates, provider ids), trial start on organization creation, trial-ending notices, grace period, read-only mode when a subscription lapses (data is never deleted for non-payment).
+3. **Usage metering:** `usage_records` per organization and dimension per day (units, active residents, staff seats, AI requests and tokens from `ai_usage`), shown against limits, sent to the provider for metered prices.
+4. **Billing provider abstraction:** `BillingProvider` interface with a **mock provider** (local checkout page, deterministic invoices, simulated webhooks — labelled as development) and a **Stripe adapter** (Checkout, Customer Portal, webhook signature verification, idempotent event handling). Upgrade, downgrade (effective at period end, with a check that current usage fits), cancellation, invoice history.
+5. **API keys:** `api_keys` (hashed, prefixed, scoped to permissions and optionally properties, last used, revocable), acting as a service principal through the same authorization and RLS as users; per-key rate limits; every API write audited with the key id.
+6. **Versioned REST API** (`/api/v1/*`): properties, units, residents, work orders, vendors, bookings, packages, incidents, complaints — cursor pagination, filtering, sorting, a standard error shape, idempotency keys on writes, and an OpenAPI document generated from the Zod schemas, rendered as API docs.
+7. **Outgoing webhooks:** `webhooks` + `webhook_deliveries` fed by the outbox (a third consumer): per-endpoint event selection, HMAC-SHA256 signatures with timestamp, exponential retries, automatic disabling after repeated failures, delivery log with replay, and an **SSRF-safe fetcher** (DNS resolution checked against private, loopback and link-local ranges, no redirects to them, size and time limits).
+8. **Integration framework:** `integrations` (provider, encrypted credentials, status, last sync) with adapters for email (Resend/SendGrid behind the existing `Mailer`), SMS (Twilio, with opt-in and quiet hours), Slack/Teams notifications as an automation action, and the calendar sync interface (Google/Outlook) — the first two implemented, the rest as interfaces with a mock.
+9. **Feature flags:** `feature_flags` (global and per organization) with the platform admin console to toggle them; plan entitlements and flags are checked in the same place.
+10. **Tests:** plan/entitlement maths, trial and downgrade rules, mock-provider checkout → webhook → subscription state, Stripe webhook signature and idempotency (fixtures), API key scoping and cross-tenant attempts, webhook signing, retries and SSRF refusals, E2E for upgrade and for API → webhook.
+
+Carried over: text recognition (OCR) for scanned PDFs and images, and indexing spreadsheets/slides (later, behind a flag); voice input for the assistant (Iteration 12); web push notifications (manifest exists; service worker + VAPID in Iteration 12); payment collection for amenity fees/deposits (with the billing provider, Iteration 10 if time allows, otherwise 11); Google/Outlook calendar sync implementation (interface in 10); camera / licence-plate-recognition integration beyond the `ingestDetection` entry point (later, behind a feature flag); a visual "flow" view of automation rules and per-rule success metrics (Iteration 12 polish); Docker compose run on a machine with Docker.
