@@ -234,11 +234,12 @@ export const ACTION_SCHEMAS = {
   request_approval: z.object({ type: z.literal("request_approval"), role: z.string().min(1, "Choose who approves.").max(40), note: z.string().trim().max(500).default("") }),
   assistant_draft: z.object({ type: z.literal("assistant_draft"), instruction: z.string().trim().max(500).default("") }),
   send_report: z.object({ type: z.literal("send_report"), report: z.enum(["maintenance", "sla", "vendors", "complaints", "incidents", "workload", "health"]), period: z.enum(["7d", "30d"]).default("7d"), to: recipientsSchema }),
+  post_to_chat: z.object({ type: z.literal("post_to_chat"), provider: z.enum(["slack", "teams"]), message: text(2000, "Write the message.") }),
 } as const;
 export type ActionType = keyof typeof ACTION_SCHEMAS;
 export const actionSchema = z.discriminatedUnion("type", [
   ACTION_SCHEMAS.set_priority, ACTION_SCHEMAS.set_status, ACTION_SCHEMAS.assign, ACTION_SCHEMAS.escalate, ACTION_SCHEMAS.notify, ACTION_SCHEMAS.create_task,
-  ACTION_SCHEMAS.draft_announcement, ACTION_SCHEMAS.request_approval, ACTION_SCHEMAS.assistant_draft, ACTION_SCHEMAS.send_report,
+  ACTION_SCHEMAS.draft_announcement, ACTION_SCHEMAS.request_approval, ACTION_SCHEMAS.assistant_draft, ACTION_SCHEMAS.send_report, ACTION_SCHEMAS.post_to_chat,
 ]);
 export type WorkflowAction = z.infer<typeof actionSchema>;
 
@@ -253,6 +254,7 @@ export const ACTIONS: Record<ActionType, { label: string; subjects: (SubjectType
   request_approval: { label: "Ask for approval", subjects: ["work_order", "complaint", "incident", "inspection", "booking", "package", "document", "schedule"], help: "Pauses the rule until someone with the role approves; the remaining steps run after that." },
   assistant_draft: { label: "Assistant draft", subjects: ["work_order", "complaint", "incident"], help: "The assistant writes a summary as an internal note marked as a draft. Nothing is sent." },
   send_report: { label: "Send a report", subjects: ["schedule", "work_order", "complaint", "incident", "inspection", "booking", "package", "document"], help: "Sends the report's headline numbers with a link to the full report." },
+  post_to_chat: { label: "Post to Slack or Teams", subjects: ["work_order", "complaint", "incident", "inspection", "booking", "package", "document", "schedule"], help: "Posts the message to the channel connected in Organization → Integrations." },
 };
 
 export function actionsFor(trigger: TriggerType): ActionType[] {
@@ -346,6 +348,7 @@ export function describeAction(a: WorkflowAction, n: NameBook = {}): string {
     case "request_approval": return `Ask a ${n.roles?.[a.role] ?? a.role} to approve before continuing`;
     case "assistant_draft": return "Have the assistant draft a summary as an internal note (nothing is sent)";
     case "send_report": return `Send the ${REPORT_LABEL[a.report]?.toLowerCase() ?? a.report} report (last ${a.period === "7d" ? "7" : "30"} days) to ${describeRecipients(a.to, n)}`;
+    case "post_to_chat": return `Post to ${a.provider === "slack" ? "Slack" : "Microsoft Teams"}: “${a.message.length > 60 ? `${a.message.slice(0, 57)}…` : a.message}”`;
   }
 }
 

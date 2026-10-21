@@ -12,7 +12,7 @@ import { notificationTemplate } from "../../mail/templates";
 import { env } from "../../env";
 import { log } from "../../log";
 import { addTimeline } from "../ops/core";
-import { membershipUser, usersWithPermAt, vendorUsers } from "./recipients";
+import { membershipUser, usersWithOrgPerm, usersWithPermAt, vendorUsers } from "./recipients";
 import { communityDeliveries } from "./community";
 import { analyticsSettings } from "../../analytics/settings";
 import { activeOrgs } from "../../system-orgs";
@@ -49,6 +49,8 @@ export const NOTIFICATION_KINDS = {
   "workflow.approval": { label: "Automation steps waiting for my approval", emailDefault: true },
   "report.scheduled": { label: "Scheduled reports", emailDefault: true },
   "brief.daily": { label: "My daily operations brief", emailDefault: true },
+  "billing.notice": { label: "Billing: trial ending, failed payments and subscription changes", emailDefault: true },
+  "developer.notice": { label: "Webhook endpoints switched off after repeated failures", emailDefault: true },
 } as const;
 export type NotificationKind = keyof typeof NOTIFICATION_KINDS;
 
@@ -154,6 +156,23 @@ async function deliveriesFor(tx: Tx, e: Event, base: string): Promise<Delivery[]
       if (!c.submittedByUserId) return [];
       return [{ userIds: [c.submittedByUserId], kind: "complaint.updated", title: e.type === "complaint.commented" ? `Reply on your complaint #${c.number}` : `Your complaint #${c.number} is now ${p.to}`, body: c.subject, href: `${base}/complaints/${c.id}`, entityType: "complaint", entityId: c.id }];
     }
+    case "billing.trial_ending":
+    case "billing.trial_ended":
+    case "billing.payment_failed":
+    case "billing.subscription_ended": {
+      const title = {
+        "billing.trial_ending": `Your free trial ends ${p.trialEndsAt ? `on ${new Date(p.trialEndsAt).toLocaleDateString("en-CA", { dateStyle: "medium" })}` : "soon"}`,
+        "billing.trial_ended": "Your free trial has ended — the organization is now read-only",
+        "billing.payment_failed": `A payment failed${p.invoiceNumber ? ` (invoice ${p.invoiceNumber})` : ""}`,
+        "billing.subscription_ended": "Your subscription has ended — the organization is now read-only",
+      }[e.type];
+      const body = e.type === "billing.trial_ending" ? "Choose a plan to keep making changes after the trial. Nothing is deleted either way."
+        : e.type === "billing.payment_failed" ? "Update the payment method to avoid read-only mode." : "Your data is kept. Choose a plan to make changes again.";
+      return [{ userIds: await usersWithOrgPerm(tx, e.orgId, "billing.manage"), kind: "billing.notice", title, body, href: `${base}/settings/billing`, entityType: "subscription", entityId: p.subscriptionId ?? e.orgId }];
+    }
+    case "webhook.endpoint_disabled":
+      return [{ userIds: await usersWithOrgPerm(tx, e.orgId, "api.manage"), kind: "developer.notice", title: `Webhook endpoint switched off: ${p.url ?? ""}`.trim(),
+        body: "Deliveries kept failing. Fix the endpoint, then switch it back on — failed deliveries can be replayed.", href: `${base}/settings/developers/webhooks/${p.endpointId}`, entityType: "webhook_endpoint", entityId: p.endpointId! }];
     case "inspection.failed": {
       const [i] = await tx.select().from(inspections).where(eq(inspections.id, p.inspectionId!));
       if (!i) return [];

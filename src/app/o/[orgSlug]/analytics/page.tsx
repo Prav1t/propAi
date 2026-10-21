@@ -6,6 +6,7 @@ import { canReadMetric, metricBreakdown, metricSeries, metricValues, type Metric
 import { bucketLabel } from "@/server/analytics/period";
 import { propertyHealth } from "@/server/analytics/health";
 import { computeInsights } from "@/server/analytics/insights";
+import { getEntitlements } from "@/server/billing/entitlements";
 import { vendorPerformance } from "@/server/modules/analytics/vendors";
 import { automationStats, canManageAutomations } from "@/server/automation/service";
 import { availableReports } from "@/server/analytics/reports";
@@ -31,6 +32,8 @@ export default async function AnalyticsPage({ params, searchParams }: PageProps<
   const scope = { propertyId: f.propertyId, buildingId: f.buildingId };
   const can = (k: MetricKey) => canReadMetric(principal, k);
   const bucket = f.period.bucket;
+  // health scores and insights are a plan feature (Iteration 10)
+  const advanced = (await getEntitlements(principal.orgId)).features.advanced_analytics;
   const scopeQs = `${f.propertyId ? `&property=${f.propertyId}` : ""}${f.buildingId ? `&building=${f.buildingId}` : ""}`;
 
   const [maint, community, facility, created, completed, byCategory, openByProperty, complaintsBy, incidentsBy, health, insights, vendors, auto] = await Promise.all([
@@ -42,8 +45,8 @@ export default async function AnalyticsPage({ params, searchParams }: PageProps<
     f.propertyId ? metricBreakdown(ctx, "open_backlog", "building", null, scope, 8) : metricBreakdown(ctx, "open_backlog", "property", null, scope, 8),
     metricBreakdown(ctx, "complaints_created", "category", f.period, scope, 6),
     metricBreakdown(ctx, "incidents_reported", "type", f.period, scope, 6),
-    can("open_backlog") ? propertyHealth(ctx, { propertyId: f.propertyId }) : Promise.resolve([]),
-    computeInsights(ctx),
+    advanced && can("open_backlog") ? propertyHealth(ctx, { propertyId: f.propertyId }) : Promise.resolve([]),
+    advanced ? computeInsights(ctx) : Promise.resolve([]),
     principal.permissions.has("vendor.read") && can("requests_completed") ? vendorPerformance(ctx, { from: f.period.from, to: f.period.to, propertyId: f.propertyId ?? undefined, buildingId: f.buildingId ?? undefined }) : Promise.resolve([]),
     canManageAutomations(principal) ? automationStats(ctx, f.period.from, f.period.to) : Promise.resolve(null),
   ]);
@@ -140,6 +143,9 @@ export default async function AnalyticsPage({ params, searchParams }: PageProps<
         </section>
       ) : null}
 
+      {!advanced && can("open_backlog") ? (
+        <p className="text-[13px] text-muted">Property health scores and insights are included in the Professional and Enterprise plans.</p>
+      ) : null}
       {health.length ? (
         <section aria-labelledby="health-h">
           <SectionTitle id="health-h" action={principal.permissions.has("org.settings.manage") ? <Link href={`${base}/settings/analytics`} className="text-[13px] text-accent hover:underline">Weights</Link> : null}>Property health</SectionTitle>

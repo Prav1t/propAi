@@ -1,4 +1,6 @@
 import "server-only";
+import { connectedChat } from "../integrations/service";
+import { assertFeature } from "../billing/entitlements";
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Tx } from "../db/client";
 import { buildings, memberships, organizations, outboxEvents, properties, roles, users, vendorProperties, vendors, workflowRuns, workflows } from "../db/schema";
@@ -96,6 +98,7 @@ export type BuilderOptions = {
   members: { id: string; name: string; role: string; propertyIds: string[] | null }[]; // null = every property
   vendors: { id: string; name: string; propertyIds: string[] }[];
   roles: { key: string; name: string }[];
+  chat: { provider: "slack" | "teams"; name: string; channel: string | null }[]; // connected chat integrations (Iteration 10)
 };
 
 export async function builderOptions(ctx: TenantCtx): Promise<BuilderOptions> {
@@ -122,6 +125,7 @@ export async function builderOptions(ctx: TenantCtx): Promise<BuilderOptions> {
       members: staff.map((s) => ({ id: s.id, name: s.name, role: s.role, propertyIds: s.scope === "org" ? null : [...new Set(scopes.rows.filter((x) => x.membership_id === s.id && x.property_id).map((x) => x.property_id))] })),
       vendors: vs.map((v) => ({ ...v, propertyIds: vp.filter((x) => x.vendorId === v.id).map((x) => x.propertyId) })),
       roles: [...new Map(rs.map((r) => [r.key, r])).values()],
+      chat: await connectedChat(p.orgId),
     };
   });
 }
@@ -178,6 +182,7 @@ async function validateReferences(tx: Tx, p: Principal, input: WorkflowInput) {
 }
 
 export async function saveRule(ctx: TenantCtx, id: string | null, raw: unknown, enable: boolean) {
+  await assertFeature(ctx.principal.orgId, "automation");
   const p = ctx.principal;
   requireManage(p);
   const parsed = workflowSchema.safeParse(raw);
@@ -207,6 +212,7 @@ export async function saveRule(ctx: TenantCtx, id: string | null, raw: unknown, 
 
 // turning a rule on makes you its owner: it will act with your permissions
 export async function setRuleEnabled(ctx: TenantCtx, id: string, enabled: boolean) {
+  if (enabled) await assertFeature(ctx.principal.orgId, "automation");
   const p = ctx.principal;
   requireManage(p);
   return tenantTx(ctx, async (tx) => {

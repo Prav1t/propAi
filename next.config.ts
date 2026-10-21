@@ -33,6 +33,9 @@ const nextConfig: NextConfig = {
   experimental: {
     // photo/video uploads on requests, incidents and inspections (per-file limits enforced server-side)
     serverActions: { bodySizeLimit: "30mb" },
+    // small dev machines / CI containers: DEV_FS_CACHE=off turns off Turbopack's persistent dev cache, whose
+    // background snapshots can take several GB on this project (the E2E container has a ~6 GB memory limit)
+    ...(process.env.DEV_FS_CACHE === "off" ? { turbopackFileSystemCacheForDev: false } : {}),
   },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];

@@ -13,8 +13,12 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies",
   "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks",
   // iteration 9: analytics & automation
-  "workflows", "workflow_runs", "daily_briefs"];
-const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES];
+  "workflows", "workflow_runs", "daily_briefs",
+  // iteration 10: billing (seeded for both organizations)
+  "subscriptions", "invoices", "usage_records", "billing_events"];
+// iteration 10 tables that start empty for the second tenant (keys, webhooks, integrations): read isolation still applies
+const PLATFORM_TABLES = ["api_keys", "api_idempotency", "webhook_endpoints", "webhook_deliveries", "webhook_attempts", "integrations"];
+const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES, ...PLATFORM_TABLES];
 
 let A: string; // Pacific Properties
 let B: string; // Northshore Strata
@@ -63,7 +67,8 @@ describe("reads", () => {
   it.each(["work_orders", "tasks", "incidents", "complaints", "inspections", "timeline_events", "notifications", "outbox_events", "bookings", "packages", "announcements", "message_threads", "messages", "documents",
     "visitors", "parking_permits", "parking_violations", "vehicles", "shifts", "shift_handoffs", "assets", "pm_schedules", "asset_downtime",
     "ai_conversations", "ai_messages", "ai_tool_calls", "ai_usage", "ai_approvals", "ai_policies",
-    "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks", "workflows", "workflow_runs", "daily_briefs"])("%s: no context sees nothing", async (table) => {
+    "knowledge_entries", "knowledge_entry_versions", "kb_sources", "kb_chunks", "workflows", "workflow_runs", "daily_briefs",
+    "subscriptions", "invoices", "usage_records", "billing_events", "api_keys", "webhook_endpoints", "integrations"])("%s: no context sees nothing", async (table) => {
     await asApp({}, async (q) => {
       const { rows } = await q(`select count(*)::int as n from ${table}`);
       expect(rows[0].n).toBe(0);
@@ -132,6 +137,42 @@ describe("reads", () => {
       expect((await q("select count(*)::int n from daily_briefs where org_id = $1", [B])).rows[0].n).toBe(0);
     });
   });
+  it("billing, API keys and webhooks can't be planted or changed across organizations", async () => {
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      expect((await q("update subscriptions set plan_key = 'enterprise' where org_id = $1", [B])).rowCount).toBe(0);
+      expect((await q("delete from invoices where org_id = $1", [B])).rowCount).toBe(0);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into invoices (org_id, number, provider, provider_invoice_id, status, total_cents) values ($1, 'X', 'mock', 'planted', 'paid', 0)", [B])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into api_keys (org_id, name, prefix, key_hash, created_by_user_id) values ($1, 'planted', 'planted1', 'h', $2)", [B, adminId])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into webhook_endpoints (org_id, url, secret_enc) values ($1, 'https://x.example', 'x')", [B])).rejects.toThrow(/row-level security/);
+    });
+  });
+  it("an API key lookup sees only the presented key, and only platform admins change feature flags", async () => {
+    const { rows: keys } = await ownerPool.query("select key_hash from api_keys limit 1");
+    const c = await appPool.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query("select set_config('app.api_key_hash', $1, true)", [keys[0].key_hash]);
+      expect((await c.query("select count(*)::int n from api_keys")).rows[0].n).toBe(1);
+      await c.query("ROLLBACK");
+    } finally {
+      c.release();
+    }
+    await asApp({}, async (q) => {
+      expect((await q("select count(*)::int n from api_keys")).rows[0].n).toBe(0);
+    });
+    await asApp({ orgId: A, userId: adminId }, async (q) => {
+      await expect(q("insert into feature_flags (key, org_id, enabled) values ('public_api', $1, false)", [A])).rejects.toThrow(/row-level security/);
+    });
+    await asApp({ platformAdmin: true, orgId: A }, async (q) => {
+      expect((await q("insert into feature_flags (key, org_id, enabled) values ('public_api', $1, false)", [A])).rowCount).toBe(1);
+    });
+  });
   it("outbox: org context enqueues only for itself; the worker's system context reads across orgs", async () => {
     await asApp({ orgId: A, userId: adminId }, async (q) => {
       expect((await q("select count(*)::int n from outbox_events where org_id <> $1", [A])).rows[0].n).toBe(0);
@@ -139,8 +180,8 @@ describe("reads", () => {
       await expect(q("insert into outbox_events (org_id, type, payload) values ($1, 'test', '{}')", [B])).rejects.toThrow(/row-level security/);
     });
     await asApp({ system: true }, async (q) => {
-      const { rows } = await q("select count(distinct org_id)::int n from outbox_events");
-      expect(rows[0].n).toBe(2);
+      const { rows } = await q("select count(distinct org_id)::int n from outbox_events where org_id = any($1)", [[A, B]]);
+      expect(rows[0].n).toBe(2); // (other suites may add organizations of their own)
     });
   });
   it("system context cannot write tenant rows into an org it doesn't name", async () => {

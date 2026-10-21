@@ -11,6 +11,7 @@ import { RUN_STATUS } from "@/lib/automation-labels";
 import { TEMPLATES } from "@/lib/automation-templates";
 import { TRIGGERS, type TriggerType } from "@/lib/automation";
 import { fmtDateTime, relative } from "@/lib/time";
+import { getEntitlements } from "@/server/billing/entitlements";
 
 export const metadata = { title: "Automations" };
 
@@ -27,10 +28,12 @@ export default async function AutomationsPage({ params, searchParams }: PageProp
   const rules = manager && tab === "rules" ? await listRules(ctx) : [];
   const runs = manager && tab === "runs" ? await listRuns(ctx, { status, page: Number(sp(q.page)) || 1 }) : null;
   const tz = principal.orgTimezone;
+  const ent = await getEntitlements(principal.orgId);
   return (
     <>
       <PageHeader title="Automations" description="Rules that react to what happens in your buildings — WHEN something happens, IF it matches, THEN do these steps. Every run is logged."
         actions={manager ? <LinkButton href={`${base}/new`}>New rule</LinkButton> : null} />
+      {!ent.features.automation ? <div className="mb-4"><FormAlert kind="info">{ent.plan.features.includes("automation") ? "Automation rules are switched off for your organization right now." : `Automation rules aren't included in the ${ent.plan.name} plan, so rules don't run. An administrator can upgrade in Organization → Billing.`}</FormAlert></div> : null}
       {sp(q.deleted) ? <div className="mb-4"><FormAlert kind="success">Rule deleted. Its run history is gone; the audit log keeps what it did.</FormAlert></div> : null}
       <Panel>
         <LinkTabs active={tab} tabs={[

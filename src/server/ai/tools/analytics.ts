@@ -1,4 +1,5 @@
 import "server-only";
+import { getEntitlements } from "../../billing/entitlements";
 import { z } from "zod";
 import { defineTool, err, ok, plural, type ToolDisplay } from "./registry";
 import { dateArg, locationArg, placeFilter, where } from "./common";
@@ -160,6 +161,7 @@ export const propertyHealthTool = defineTool({
   available: (p) => p.permissions.has("analytics.read") && p.permissions.has("workorder.read"),
   riskClass: 1,
   async execute(ctx, a, env) {
+    if (!(await getEntitlements(ctx.principal.orgId)).features.advanced_analytics) return { result: err("FORBIDDEN", "Property health scores aren't included in your organization's plan.") };
     const pf = await placeFilter(ctx, a.location);
     if (isErr(pf)) return { result: pf };
     const rows = await propertyHealth(ctx, { propertyId: pf.propertyId ?? null, now: env.now });

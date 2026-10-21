@@ -1,0 +1,2 @@
+ALTER TABLE "work_orders" DROP CONSTRAINT "wo_source_ck";--> statement-breakpoint
+ALTER TABLE "work_orders" ADD CONSTRAINT "wo_source_ck" CHECK ("work_orders"."source" in ('resident','staff','inspection','incident','complaint','system','api'));

@@ -24,6 +24,7 @@ import { HEALTH_GRADE } from "@/lib/analytics-labels";
 import { describeAction, renderAutomationText, REPORT_LABEL, type AutomationVars, type Subject, type WorkflowAction } from "@/lib/automation";
 import { PRIORITY, WO_STATUS } from "@/lib/ops-labels";
 import { membersWithRoleAt, names, onCallPerson, resolveRecipients, type Person } from "./recipients";
+import { connectedChat, sendChatMessage } from "../integrations/service";
 
 // What each automation action does. `plan` describes the effect without writing anything (dry runs);
 // `run` makes the change through the same domain services as the UI, as the rule's owner (ctx.automation set).
@@ -145,6 +146,11 @@ export async function planAction(a: WorkflowAction, env: ActionEnv): Promise<str
       const ps = await readTx(env, (tx) => resolveRecipients(tx, env.ctx.principal.orgId, a.to, s, propertyOf(env)));
       return ps.length ? `Would send the ${REPORT_LABEL[a.report]?.toLowerCase()} report to ${names(ps)} (each sees only what their own access allows).` : "Nobody matches the recipients right now — this step would be skipped.";
     }
+    case "post_to_chat": {
+      const chat = (await connectedChat(env.ctx.principal.orgId)).find((c) => c.provider === a.provider);
+      const where = a.provider === "slack" ? "Slack" : "Microsoft Teams";
+      return chat ? `Would post to ${where}${chat.channel ? ` (${chat.channel})` : ""}: “${renderAutomationText(a.message, vars)}”.` : `${where} isn't connected — this step would fail. Connect it in Organization → Integrations.`;
+    }
   }
 }
 
@@ -230,6 +236,10 @@ export async function runAction(a: WorkflowAction, env: ActionEnv): Promise<Acti
     }
     case "assistant_draft": return assistantDraft(a.instruction, env);
     case "send_report": return sendReport(a, env);
+    case "post_to_chat": {
+      const r = await sendChatMessage(ctx.principal.orgId, a.provider, renderAutomationText(a.message, vars));
+      return { status: "done", summary: `Posted to ${a.provider === "slack" ? "Slack" : "Microsoft Teams"}${r.channel ? ` (${r.channel})` : ""}.` };
+    }
     case "request_approval": throw new Error("approval steps are handled by the engine");
   }
 }

@@ -1,4 +1,5 @@
 import "server-only";
+import { loadEntitlements } from "../billing/entitlements";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { aiApprovals, aiConversations, aiToolCalls, organizations, users } from "../db/schema";
 import type { Tx } from "../db/client";
@@ -266,6 +267,8 @@ export async function approvePlan(ctx: TenantCtx, id: string, input: ApproveInpu
     const rules = await loadPolicyRules(tx, p.orgId);
     let blocked: { stepId: string; why: string } | null = null;
     if (!readAiSettings(org.settings).enabled) blocked = { stepId: steps[0]?.id ?? "s1", why: "The assistant has been switched off for your organization." };
+    const ent = await loadEntitlements(tx, p.orgId);
+    if (!blocked && ent.readOnly) blocked = { stepId: steps[0]?.id ?? "s1", why: ent.access.reason ?? "Changes are paused for your organization." };
     for (const s of steps) {
       if (blocked) break;
       const def = toolByName(s.tool);

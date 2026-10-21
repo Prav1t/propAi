@@ -28,3 +28,11 @@ export async function vendorUsers(tx: Tx, vendorId: string | null): Promise<stri
   const rows = await tx.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.vendorId, vendorId), eq(memberships.status, "active")));
   return rows.map((r) => r.userId);
 }
+
+// everyone whose role has an organization-level permission (billing, developer settings)
+export async function usersWithOrgPerm(tx: Tx, orgId: string, perm: string): Promise<string[]> {
+  const rows = await tx.selectDistinct({ userId: memberships.userId }).from(memberships)
+    .innerJoin(roles, eq(roles.id, memberships.roleId))
+    .where(and(eq(memberships.orgId, orgId), eq(memberships.status, "active"), sql`${perm} = any(${roles.permissions})`));
+  return rows.map((r) => r.userId);
+}

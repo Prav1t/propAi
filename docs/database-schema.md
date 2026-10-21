@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–9)
+## Implemented (Iterations 1–10)
 
 ### Identity & auth (🌐)
 
@@ -169,6 +169,24 @@ New columns:
 
 Analytics indexes (`0019`): `work_orders (org_id, completed_at)` where completed, `packages (org_id, received_at)`, `bookings (org_id, starts_at)`. Reports, metrics and health-score weights are code and organization settings (`organizations.settings.analytics`: `slaWarningMinutes`, `briefEnabled`, `briefTime`, `healthWeights`), not tables.
 
+### Billing, developer platform & integrations (🔒, Iteration 10)
+
+| Table | Purpose / key columns |
+|---|---|
+| `subscriptions` | one per organization (unique `org_id`): `plan_key` starter/professional/enterprise, `interval` month/year, `status` trialing/active/past_due/cancelled/expired, `provider` none (trial)/mock/stripe/manual (support-managed), `provider_customer_id`, `provider_subscription_id` (unique per provider), `trial_ends_at`, `trial_notice_sent_at`, `current_period_start/end`, `cancel_at_period_end`, `pending_plan_key`/`pending_interval` (downgrade at period end), `past_due_since` (grace), `limit_overrides` jsonb (per-organization deals), `last_paid_cents` (proration). Indexed for the worker: active periods by end, trials by end |
+| `invoices` | `number`, `provider` + `provider_invoice_id` (unique), `status` open/paid/void/uncollectible, `currency`, `total_cents`, `lines` jsonb `[{description, quantity, unitCents, amountCents}]`, `period_start/end`, `hosted_url` (Stripe), `issued_at`, `paid_at` |
+| `usage_records` | `(org_id, metric, day)` unique: `properties`, `units`, `active_residents`, `staff_seats`, `ai_requests` (levels, snapshotted hourly) and `api_requests`, `webhook_deliveries` (counters) |
+| `billing_events` | every provider event once: unique `(provider, event_id)`, `type`, normalized `payload`, `status` received/processed/ignored/failed, `error`; `org_id` null until matched |
+| `api_keys` | `name`, `prefix` (unique, shown), `key_hash` (sha256, unique), `created_by_user_id` (the member the key acts for), `permissions` text[] (API scopes), `property_ids` uuid[] (empty = creator's whole reach), `requests_per_minute`, `expires_at`, `last_used_at`/`last_used_ip`, `revoked_at`/`revoked_by_user_id` |
+| `api_idempotency` | `(api_key_id, key)` unique: `request_hash`, `status_code` (null while running), `response_body`; purged after 24 h |
+| `webhook_endpoints` | `url`, `description`, `secret_enc` (AES-256-GCM), `events` text[], `status` active/disabled, `disabled_reason`, `consecutive_failures`, `last_success_at`, `last_failure_at` |
+| `webhook_deliveries` | `endpoint_id` (cascade), `event_id` (unique per endpoint when present; null for pings and replays), `event_type`, frozen `payload`, `status` pending/succeeded/failed, `attempts`, `next_attempt_at` (also the claim lease), `last_status_code`, `last_error`, `delivered_at`, `replay_of`. Partial index on due pending deliveries |
+| `webhook_attempts` | one row per HTTP attempt: `attempt`, `status_code`, `error`, `response_snippet` (≤ 1 KB), `duration_ms` |
+| `integrations` | `(org_id, provider)` unique: `status` connected/error, `config` jsonb (non-secret), `credentials_enc` (AES-256-GCM JSON), `last_used_at`, `last_error`, `connected_by_user_id` |
+| `feature_flags` | `key`, `org_id` (null = global override; partial unique indexes for each case), `enabled`, `updated_by_user_id` |
+
+New columns: `outbox_events.webhooks_at` (fan-out done; backfilled for history in `0021`) with a partial pending index; `audit_logs.api_key_id`; `work_orders.source` accepts `api` (`0022`); `organizations.plan_key` now mirrors `subscriptions.plan_key` (default `professional`). Migration `0021` gives every organization that existed before billing an active, support-managed Professional subscription.
+
 ### Full-text search
 
 Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades), `documents` (title, description) and `assets` (name, tag, make, model, serial, location, category). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input; hyphenated codes such as `RTU-4` match either joined (`rtu4`) or by part (`rtu & 4`), the way Postgres indexes them. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
@@ -187,6 +205,7 @@ app_user()           -- current_setting('app.user_id')
 app_platform_admin() -- current_setting('app.platform_admin') = 'on'
 app_system()         -- current_setting('app.system') = 'on'   (background worker only, Iteration 3)
 current_setting('app.pass_token_hash')                      (public guest-pass page only, Iteration 5)
+app_api_key_hash()   -- current_setting('app.api_key_hash')   (REST API key lookup only, Iteration 10)
 ```
 
 | Policy | Rule |
@@ -207,11 +226,12 @@ current_setting('app.pass_token_hash')                      (public guest-pass p
 | AI tables (migration `0013`) | `ai_conversations`, `ai_messages`: **owner only** — `org_id = app_org() AND user_id = app_user()` for read and write; no platform-admin or worker bypass. `ai_tool_calls`, `ai_usage`: the standard tenant rule (admins read them through `ai.settings.manage` in the service) |
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
 
+| Billing, API, webhooks, integrations (migration `0021`) | `subscriptions`, `invoices`, `usage_records`, `api_keys`, `api_idempotency`, `webhook_endpoints`, `webhook_deliveries`, `webhook_attempts`, `integrations`: the standard tenant rule. **Plus** `api_key_lookup`: with no org context, a transaction that sets `app.api_key_hash` may SELECT exactly the key with that hash. `billing_events`: read in org context (or platform admin / system); written by the system context (provider webhooks arrive before the organization is known). `feature_flags`: everyone reads global rows and their own organization's; only a platform-admin context may insert, update or delete |
+
 Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 testing: inside org A, a user could see their own membership in org B. Covered by a regression test in `tests/integration/tenant-isolation.test.ts`.
 
 ## Planned tables
 
 | Iteration | Tables |
 |---|---|
-| 10 | `plans`, `subscriptions`, `invoices`, `usage_records`, `api_keys`, `webhooks`, `webhook_deliveries`, `integrations`, `feature_flags` |
 | later | `storage_lockers` (not built in Iteration 5) |

@@ -8,6 +8,8 @@ import { EXTRA_STAFF_DOMAIN, seedFacility, seedFacilityTenant } from "./seed-fac
 import { seedAi } from "./seed-ai";
 import { seedKnowledge } from "./seed-knowledge";
 import { seedAutomation } from "./seed-automation";
+import { seedBilling } from "./seed-billing";
+import { snapshotUsage } from "../src/server/billing/service";
 
 // deterministic demo data; safe to re-run (removes and recreates demo orgs/users)
 export const DEMO_PASSWORD = "DemoPass!2026";
@@ -284,13 +286,17 @@ async function main() {
     console.log(`✓ seeded 2 orgs, ${Object.keys(propIds).length + 1} properties, ${unitCount + 30} units, ${residentCount} residents, ${userRows.length} demo users`);
   });
   await pool.end();
-  // after the commit: the knowledge base and the assistant run through the app's own connection and permission checks
+  // after the commit: billing first (plans decide what automation and the assistant may do), then the knowledge base and
+  // the assistant, through the app's own connection and permission checks
+  const billing = await seedBilling();
+  console.log(`✓ billing: ${billing.subscriptions} subscriptions with invoices (development provider), ${billing.apiKeys} demo API key`);
   const kb = await seedKnowledge();
   console.log(`✓ knowledge base: ${kb.entries} entries, ${kb.sources} sources indexed into ${kb.passages} passages`);
   const auto = await seedAutomation();
   console.log(`✓ automation: ${auto.rules} rules, ${auto.runs} runs`);
   const ai = await seedAi();
   console.log(`✓ assistant: ${ai.conversations} conversations, ${ai.toolCalls} tool calls, ${ai.plans} plans (demo model)`);
+  await snapshotUsage(); // today's usage, now that the assistant has been used
 }
 
 main().catch((e) => {

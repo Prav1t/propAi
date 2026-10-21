@@ -7,6 +7,7 @@ import { getOrgContext } from "./org-context";
 import { toActionError, zodFieldErrors, type ActionState } from "./actions";
 import type { TenantCtx } from "./modules/context";
 import { afterChange } from "./after-change";
+import { assertWritable } from "./billing/entitlements";
 
 // every string field except secrets, echoed back so the form keeps input on error
 function echo(fd: FormData): Record<string, string> {
@@ -22,6 +23,7 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   schema: S;
   run: (ctx: TenantCtx, data: z.output<S>) => Promise<R>;
   done: (result: R) => { redirectTo?: string; revalidate?: string[]; message?: string; data?: unknown };
+  allowReadOnly?: boolean; // billing forms stay usable when the subscription has lapsed
 }): Promise<ActionState> {
   const values = echo(opts.fd);
   const parsed = opts.schema.safeParse(Object.fromEntries(Object.entries(values)));
@@ -29,6 +31,8 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   let result: R;
   try {
     const { ctx } = await getOrgContext(opts.orgSlug);
+    // a lapsed subscription keeps the organization readable but blocks changes (Iteration 10)
+    if (!opts.allowReadOnly) await assertWritable(ctx.principal.orgId);
     result = await opts.run(ctx, parsed.data);
   } catch (e) {
     return toActionError(e, values);

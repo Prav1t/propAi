@@ -65,6 +65,10 @@ export const PERMISSIONS = {
   "automation.manage": { module: "analytics", description: "Create and manage automation rules" },
   "ai.use": { module: "ai", description: "Use the AI assistant" },
   "ai.settings.manage": { module: "ai", description: "Configure AI policies" },
+  // billing, developer platform and integrations (Iteration 10)
+  "billing.manage": { module: "organization", description: "Choose the plan, see usage and invoices, manage the subscription" },
+  "api.manage": { module: "developers", description: "Create API keys and webhook endpoints" },
+  "integration.manage": { module: "developers", description: "Connect Slack, Microsoft Teams, Twilio and other integrations" },
 } as const satisfies Record<string, { module: string; description: string }>;
 
 export type Permission = keyof typeof PERMISSIONS;

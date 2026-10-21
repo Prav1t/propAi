@@ -6,6 +6,7 @@ import { can, ForbiddenError, NotFoundError } from "../authz/authorize";
 import { auditAs, tenantTx, ValidationError, type TenantCtx } from "../modules/context";
 import { loadPrincipal } from "../modules/organizations/principal";
 import { log } from "../log";
+import { getEntitlements, loadEntitlements } from "../billing/entitlements";
 import {
   actionSchema, conditionSchema, describeAction, describeCondition, describeSchedule, evaluateConditions, nextOccurrence, scheduleSchema,
   type NameBook, type Schedule, type Subject, type TriggerType, type WorkflowAction, type Condition, TRIGGERS,
@@ -107,6 +108,9 @@ async function matchEvent(tx: Tx, eventId: string): Promise<Run[]> {
   }
   const rules = await tx.select().from(workflows).where(and(eq(workflows.orgId, e.orgId), eq(workflows.enabled, true), eq(workflows.triggerType, trigger)));
   if (!rules.length) return [];
+  // the plan must include automation and the organization must not be read-only (Iteration 10)
+  const ent = await loadEntitlements(tx, e.orgId);
+  if (!ent.features.automation || ent.readOnly) return [];
   const subject = await loadSubject(tx, trigger, e.payload as Record<string, unknown>);
   if (!subject) return [];
   const names = await loadNameBook(tx, e.orgId);
@@ -153,6 +157,8 @@ export async function runDueSchedules(now = new Date(), limit = 20): Promise<num
       const rule = parseRule(wf);
       if (!rule?.schedule) { await tx.update(workflows).set({ nextRunAt: null }).where(eq(workflows.id, wf.id)); return null; }
       const next = nextOccurrence(rule.schedule, org.tz, now);
+      const ent = await loadEntitlements(tx, wf.orgId);
+      if (!ent.features.automation || ent.readOnly) { await tx.update(workflows).set({ nextRunAt: next }).where(eq(workflows.id, wf.id)); return null; }
       if (await pauseIfRunaway(tx, wf)) return null;
       const [r] = await tx.insert(workflowRuns).values({
         orgId: wf.orgId, workflowId: wf.id, workflowVersion: wf.version, scheduledFor: wf.nextRunAt, triggerType: "schedule",
@@ -200,6 +206,9 @@ export async function executeRun(runId: string, now = new Date()): Promise<Run |
     return { ...run, status: "failed", error, steps } as Run;
   };
   if (org.status !== "active") return fail("The organization is suspended.");
+  const ent = await getEntitlements(run.orgId, now);
+  if (!ent.features.automation) return fail(`Automation rules aren't included in the ${ent.plan.name} plan.`);
+  if (ent.readOnly) return fail(ent.access.reason ?? "The organization is read-only.");
 
   // the owner's permissions, loaded now (not when the rule was written)
   const owner = wf.ownerUserId ? await loadPrincipal(wf.ownerUserId, org.slug) : null;

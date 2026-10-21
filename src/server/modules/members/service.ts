@@ -14,6 +14,7 @@ import { invitationTemplate } from "../../mail/templates";
 import { env } from "../../env";
 import type { RequestMeta } from "../../request-meta";
 import { ConflictError, tenantTx, ValidationError, type TenantCtx } from "../context";
+import { assertNotReadOnly, assertWithinLimit, loadEntitlements } from "../../billing/entitlements";
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 
@@ -114,6 +115,9 @@ export async function inviteMember(ctx: TenantCtx, input: z.infer<typeof inviteS
     // replace any pending invitation for the same email
     await tx.update(invitations).set({ revokedAt: new Date() })
       .where(and(eq(invitations.orgId, ctx.principal.orgId), eq(invitations.email, input.email), isNull(invitations.acceptedAt), isNull(invitations.revokedAt)));
+    // staff seats are a plan limit; resident and vendor invitations are free
+    if (role.category === "staff") await assertWithinLimit(tx, ctx.principal.orgId, "staff_seats");
+    else await assertNotReadOnly(await loadEntitlements(tx, ctx.principal.orgId));
     const [inv] = await tx.insert(invitations).values({
       orgId: ctx.principal.orgId, email: input.email, roleId: role.id, propertyId,
       tokenHash: hashToken(token), invitedBy: ctx.principal.userId, expiresAt: new Date(Date.now() + INVITE_TTL_MS),

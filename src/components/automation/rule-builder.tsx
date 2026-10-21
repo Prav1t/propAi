@@ -17,6 +17,7 @@ export type BuilderOptions = {
   members: { id: string; name: string; role: string; propertyIds: string[] | null }[];
   vendors: { id: string; name: string; propertyIds: string[] }[];
   roles: { key: string; name: string }[];
+  chat: { provider: "slack" | "teams"; name: string; channel: string | null }[];
 };
 type DryRunResult = { matched: boolean; reason?: string; subjectLabel: string | null; steps: { label: string; outcome: string; afterApproval: boolean }[] };
 
@@ -37,6 +38,7 @@ function defaultAction(t: ActionType, opts: BuilderOptions): WorkflowAction {
     case "request_approval": return { type: t, role: opts.roles.some((r) => r.key === "property_manager") ? "property_manager" : opts.roles[0]?.key ?? "", note: "" };
     case "assistant_draft": return { type: t, instruction: "" };
     case "send_report": return { type: t, report: "maintenance", period: "7d", to: { ...noRecipients, roles: ["property_manager"] } };
+    case "post_to_chat": return { type: t, provider: opts.chat[0]?.provider ?? "slack", message: "{{ref}}: {{title}} at {{property}}" };
   }
 }
 
@@ -350,6 +352,17 @@ function ActionFields({ a, i, onChange, options, members, vendors }: { a: Workfl
         <div className="flex flex-wrap items-end gap-2">
           <div><label htmlFor={id("ro")} className={label}>Approved by a</label><Select id={id("ro")} className={cn("mt-1 w-52!", small)} value={a.role} onChange={(e) => onChange({ ...a, role: e.target.value })}>{options.roles.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</Select></div>
           <div className="min-w-56 flex-1"><label htmlFor={id("no")} className={label}>Note for the approver</label><Input id={id("no")} className={cn("mt-1", small)} value={a.note} maxLength={500} onChange={(e) => onChange({ ...a, note: e.target.value })} /></div>
+        </div>
+      );
+    case "post_to_chat":
+      return (
+        <div className="space-y-2">
+          {!options.chat.length ? <p className="text-[12px] text-warning">Slack and Teams aren&apos;t connected yet — connect one in Organization → Integrations, or this step will fail.</p> : null}
+          <div><label htmlFor={id("cp")} className={label}>Post to</label>
+            <Select id={id("cp")} className={cn("mt-1 w-56!", small)} value={a.provider} onChange={(e) => onChange({ ...a, provider: e.target.value as "slack" })}>
+              {(["slack", "teams"] as const).map((pv) => { const c = options.chat.find((x) => x.provider === pv); return <option key={pv} value={pv}>{pv === "slack" ? "Slack" : "Microsoft Teams"}{c ? (c.channel ? ` (${c.channel})` : "") : " — not connected"}</option>; })}
+            </Select></div>
+          <div><label htmlFor={id("cm")} className={label}>Message</label><textarea id={id("cm")} rows={2} maxLength={2000} className="mt-1 block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 py-1.5 text-[13px]" value={a.message} onChange={(e) => onChange({ ...a, message: e.target.value })} /></div>
         </div>
       );
     case "send_report":

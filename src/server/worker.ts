@@ -5,9 +5,13 @@ import { generatePreventiveMaintenance } from "./modules/assets/service";
 import { processIndexQueue } from "./kb/indexer";
 import { MAX_CHAIN_DEPTH, processAutomationEvents, runDueSchedules, sweepStaleRuns } from "./automation/engine";
 import { deliverDailyBriefs } from "./analytics/brief";
+import { billingTick, snapshotUsage } from "./billing/service";
+import { deliverDueWebhooks, fanOutWebhookEvents } from "./webhooks/service";
+import { purgeIdempotencyKeys } from "./api/maintenance";
 import { log } from "./log";
 
-const g = globalThis as unknown as { __workerTimer?: ReturnType<typeof setInterval> };
+const g = globalThis as unknown as { __workerTimer?: ReturnType<typeof setInterval>; __lastHourly?: number };
+const HOUR = 3600_000;
 
 // one tick: time-based jobs first (they emit events), then deliver pending events
 export async function workerTick() {
@@ -29,8 +33,19 @@ export async function workerTick() {
     const swept = await sweepStaleRuns();
     const delivered = await drainOutbox();
     const indexed = await processIndexQueue();
-    if (breached || warned || published || reminded || pm || scheduled || automated || briefs || swept || delivered || indexed) {
-      log.info("worker.tick", { breached, warned, published, reminded, pm, scheduled, automated, briefs, swept, delivered, indexed });
+    // Iteration 10: billing (trial notices, expiry, renewals), webhooks, and hourly housekeeping
+    const billing = await billingTick();
+    const fanned = await fanOutWebhookEvents();
+    const hooks = await deliverDueWebhooks();
+    let usage = 0;
+    if (!g.__lastHourly || Date.now() - g.__lastHourly > HOUR) {
+      g.__lastHourly = Date.now();
+      usage = await snapshotUsage();
+      await purgeIdempotencyKeys();
+    }
+    const billed = billing.notices + billing.expired + billing.renewed;
+    if (breached || warned || published || reminded || pm || scheduled || automated || briefs || swept || delivered || indexed || billed || fanned || hooks) {
+      log.info("worker.tick", { breached, warned, published, reminded, pm, scheduled, automated, briefs, swept, delivered, indexed, billing, fanned, hooks, usage });
     }
   } catch (err) {
     log.error("worker.tick_failed", { err });

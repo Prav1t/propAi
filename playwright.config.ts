@@ -23,7 +23,9 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run dev",
-    env: { RATE_LIMITS: "relaxed" },
+    // local webhook receivers in the API → webhook test listen on 127.0.0.1 (never allowed in production);
+    // DEV_FS_CACHE=off keeps the dev server inside small CI memory limits (see next.config.ts)
+    env: { RATE_LIMITS: "relaxed", WEBHOOK_ALLOW_PRIVATE_TARGETS: "true", DEV_FS_CACHE: "off" },
     url: "http://localhost:3000/api/health",
     reuseExistingServer: true,
     timeout: 120_000,

@@ -9,6 +9,7 @@ import { authorize, scopeFilter, ForbiddenError } from "../../authz/authorize";
 import { writeAudit } from "../../audit";
 import type { RequestMeta } from "../../request-meta";
 import { tenantTx, ValidationError, type TenantCtx } from "../context";
+import { startTrial } from "../../billing/service";
 
 export const ORG_KINDS = ["property_management", "strata", "rental", "facility", "concierge", "owner_operator"] as const;
 export const TIMEZONES = [
@@ -56,6 +57,7 @@ export async function createOrganization(userId: string, input: z.infer<typeof c
     const [adminRole] = await tx.select().from(roles).where(and(isNull(roles.orgId), eq(roles.key, "org_admin"))).limit(1);
     if (!adminRole) throw new Error("System roles are not seeded. Run `npm run db:migrate`.");
     const [m] = await tx.insert(memberships).values({ orgId, userId, roleId: adminRole.id }).returning();
+    await startTrial(tx, orgId); // every new organization starts on a free trial (Iteration 10)
     await writeAudit(tx, { orgId, actorUserId: userId, action: "org.created", entityType: "organization", entityId: orgId, after: org }, meta);
     await writeAudit(tx, { orgId, actorUserId: userId, action: "member.added", entityType: "membership", entityId: m.id, after: { userId, role: "org_admin" } }, meta);
     return org;

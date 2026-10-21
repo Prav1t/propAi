@@ -1,6 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { getOrgContext } from "@/server/org-context";
+import { assertWritable } from "@/server/billing/entitlements";
 import { orgSettingsSchema, updateOrganizationSettings } from "@/server/modules/organizations/service";
 import {
   changeMemberRole, changeRoleSchema, inviteMember, inviteSchema, revokeInvitation, setMemberStatus,
@@ -15,6 +16,7 @@ export async function updateOrgSettingsAction(_: ActionState, fd: FormData): Pro
   if (!parsed.success) return { fieldErrors: zodFieldErrors(parsed.error), values };
   try {
     const { ctx } = await getOrgContext(slug);
+    await assertWritable(ctx.principal.orgId);
     await updateOrganizationSettings(ctx, parsed.data);
   } catch (e) {
     return toActionError(e, values);

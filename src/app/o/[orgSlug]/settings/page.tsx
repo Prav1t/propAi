@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
+import { PLANS, isPlanKey } from "@/config/plans";
 import { getOrgContext } from "@/server/org-context";
 import { getOrganization, orgSettings, TIMEZONES } from "@/server/modules/organizations/service";
 import { can } from "@/server/authz/authorize";
@@ -25,7 +27,7 @@ export default async function SettingsPage({ params }: PageProps<"/o/[orgSlug]/s
           <dl className="grid gap-x-6 gap-y-3 p-4 text-sm sm:grid-cols-[160px_1fr]">
             <dt className="text-muted">URL</dt><dd className="font-mono text-[13px]">/o/{org.slug}</dd>
             <dt className="text-muted">Type</dt><dd>{org.kind.replace("_", " ")}</dd>
-            <dt className="text-muted">Plan</dt><dd><Badge tone="accent">{org.planKey}</Badge> <span className="text-[13px] text-faint">Billing arrives in a later release.</span></dd>
+            <dt className="text-muted">Plan</dt><dd><Badge tone="accent">{isPlanKey(org.planKey) ? PLANS[org.planKey].name : org.planKey}</Badge> {principal.permissions.has("billing.manage") ? <Link className="text-[13px] text-accent underline" href={`/o/${orgSlug}/settings/billing`}>Plan and billing</Link> : null}</dd>
             <dt className="text-muted">Created</dt><dd>{org.createdAt.toLocaleDateString("en-CA", { dateStyle: "long" })}</dd>
           </dl>
         </Panel>

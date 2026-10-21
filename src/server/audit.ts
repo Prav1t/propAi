@@ -14,6 +14,7 @@ export type AuditEntry = {
   aiGenerated?: boolean;
   approvalId?: string | null;
   workflowRunId?: string | null; // the automation run that made the change
+  apiKeyId?: string | null; // the API key the change came through
 };
 
 // strips secrets before persisting snapshots
@@ -44,5 +45,6 @@ export async function writeAudit(tx: Tx, entry: AuditEntry, meta?: RequestMeta |
     aiGenerated: entry.aiGenerated ?? false,
     approvalId: entry.approvalId ?? null,
     workflowRunId: entry.workflowRunId ?? null,
+    apiKeyId: entry.apiKeyId ?? null,
   });
 }

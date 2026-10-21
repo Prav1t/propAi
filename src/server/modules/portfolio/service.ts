@@ -7,6 +7,7 @@ import {
 } from "../../db/schema";
 import { authorize, can, ForbiddenError, NotFoundError } from "../../authz/authorize";
 import { auditAs, blankToNull, friendlyUnique, tenantTx, ValidationError, type TenantCtx } from "../context";
+import { assertWithinLimit } from "../../billing/entitlements";
 import { matches, pageArgs, scopeCondition, toPage, toPrefixQuery, visiblePropertyIds, type Page } from "../scope";
 import type { Tx } from "../../db/client";
 
@@ -208,6 +209,7 @@ export async function createProperty(ctx: TenantCtx, input: PropertyInput) {
   authorizeCreateProperty(ctx, input.portfolioId);
   return friendlyUnique(() => tenantTx(ctx, async (tx) => {
     await assertPortfolio(tx, ctx.principal.orgId, input.portfolioId);
+    await assertWithinLimit(tx, ctx.principal.orgId, "properties");
     const [row] = await tx.insert(properties).values({ orgId: ctx.principal.orgId, ...input }).returning();
     await auditAs(tx, ctx, "property.created", "property", row.id, undefined, row);
     return row;
@@ -379,6 +381,7 @@ export async function createUnit(ctx: TenantCtx, buildingId: string, input: Unit
     const b = await loadBuilding(tx, p.orgId, buildingId);
     authorize(p, "unit.manage", { orgId: p.orgId, propertyId: b.propertyId, buildingId });
     await assertFloor(tx, buildingId, input.floorId);
+    await assertWithinLimit(tx, p.orgId, "units");
     const [row] = await tx.insert(units).values({ orgId: p.orgId, propertyId: b.propertyId, buildingId, ...input }).returning();
     await auditAs(tx, ctx, "unit.created", "unit", row.id, undefined, row);
     return row;
@@ -411,6 +414,7 @@ export async function generateUnits(ctx: TenantCtx, buildingId: string, input: z
         number: `${f.level < 0 ? `P${-f.level}-` : f.level === 0 ? "G" : f.level}${String(i + 1).padStart(pad, "0")}`,
       })),
     );
+    if (values.length) await assertWithinLimit(tx, p.orgId, "units", values.length);
     const created = values.length ? await tx.insert(units).values(values).onConflictDoNothing().returning({ id: units.id }) : [];
     await auditAs(tx, ctx, "unit.bulk_created", "building", buildingId, undefined, { levels: `${input.fromLevel}..${input.toLevel}`, perFloor: input.perFloor, created: created.length });
     return { created: created.length, skipped: values.length - created.length };

@@ -16,6 +16,7 @@ import { buildSystemPrompt } from "./prompt";
 import { MODES, pickMode, type AiMode } from "./modes";
 import { createConversation, historyForModel, loadConversation, maxSeq } from "./store";
 import { readAiSettings, requestsThisMonth } from "./usage";
+import { getEntitlements, loadEntitlements } from "../billing/entitlements";
 import { toolsForPrincipal } from "./tools";
 import { err, isAction, makeToolEnv, ok, toolSpec, type ToolDef, type ToolDisplay, type ToolEnv, type ToolErr, type ToolOk, type ToolResult } from "./tools/registry";
 import { BRAND } from "@/config/brand";
@@ -102,6 +103,8 @@ export async function executeToolCall(ctx: TenantCtx, allowed: ToolDef[], call: 
   // ── action tools ──
   const p = ctx.principal;
   if (!turn) return done(err("ERROR", "Actions aren't available here."), null, def, args);
+  const ent = await getEntitlements(p.orgId);
+  if (ent.readOnly) return done(err("POLICY_DENIED", `Changes are paused for your organization: ${ent.access.reason ?? "it is read-only."}`), null, def, args, { outcome: "policy_denied" });
   const riskClass = def.riskClass(args, p);
   const keys = def.policyKeys(args, p);
   const same = turn.pending.find((s) => s.tool === def.name && JSON.stringify(s.input) === JSON.stringify(args));
@@ -190,9 +193,17 @@ export async function* runAssistantTurn(
       : await createConversation(tx, ctx, { mode: pickMode(p, input.mode), title: titleFrom(message) });
     const settings = readAiSettings(org.settings);
     let refusal: { code: "disabled" | "cap_reached"; message: string } | null = null;
+    const ent = await loadEntitlements(tx, p.orgId); // the plan's monthly allowance applies on top of the org's own cap
+    const planCap = ent.limits.ai_requests;
     if (!settings.enabled) refusal = { code: "disabled", message: "The assistant is switched off for your organization. An administrator can turn it on in Organization → AI assistant." };
-    else if (settings.monthlyRequestCap !== null && (await requestsThisMonth(tx, p.orgId, org.timezone)) >= settings.monthlyRequestCap) {
-      refusal = { code: "cap_reached", message: `Your organization has used this month's ${settings.monthlyRequestCap.toLocaleString("en-CA")} assistant requests. An administrator can raise the limit in Organization → AI assistant.` };
+    else if (!ent.features.ai_assistant) refusal = { code: "disabled", message: `The assistant isn't included in the ${ent.plan.name} plan.` };
+    else if (settings.monthlyRequestCap !== null || planCap !== null) {
+      const used = await requestsThisMonth(tx, p.orgId, org.timezone);
+      if (settings.monthlyRequestCap !== null && used >= settings.monthlyRequestCap) {
+        refusal = { code: "cap_reached", message: `Your organization has used this month's ${settings.monthlyRequestCap.toLocaleString("en-CA")} assistant requests. An administrator can raise the limit in Organization → AI assistant.` };
+      } else if (planCap !== null && used >= planCap) {
+        refusal = { code: "cap_reached", message: `Your organization has used the ${planCap.toLocaleString("en-CA")} assistant requests included in the ${ent.plan.name} plan this month. An administrator can upgrade in Organization → Billing.` };
+      }
     }
     const history = refusal ? [] : await historyForModel(tx, conv.id, 40, await planNotesForHistory(tx, ctx, conv.id));
     const rules = refusal ? [] : await loadPolicyRules(tx, p.orgId);

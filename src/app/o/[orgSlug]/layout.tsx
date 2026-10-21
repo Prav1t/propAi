@@ -17,13 +17,14 @@ import { visitorStats } from "@/server/modules/visitors/service";
 import { parkingStats } from "@/server/modules/parking/service";
 import { BRAND } from "@/config/brand";
 import { pendingApprovalsFor } from "@/server/automation/service";
+import { billingBanner } from "@/server/billing/service";
 
 export default async function OrgLayout({ children, params }: LayoutProps<"/o/[orgSlug]">) {
   const { orgSlug } = await params;
   const { session, principal, ctx } = await getOrgContext(orgSlug);
   const resident = principal.role.category === "resident";
   // live counts for nav badges (each query is permission-scoped and cheap)
-  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview, approvals] = await Promise.all([
+  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview, approvals, billing] = await Promise.all([
     unreadCount(ctx),
     messageBadgeCount(ctx),
     resident ? unreadAnnouncementCount(ctx) : Promise.resolve(0),
@@ -32,7 +33,9 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     !resident ? visitorStats(ctx).then((r) => r?.expectedToday ?? 0) : Promise.resolve(0),
     !resident ? parkingStats(ctx).then((r) => r?.review ?? 0) : Promise.resolve(0),
     !resident ? pendingApprovalsFor(ctx).then((r) => r.length) : Promise.resolve(0),
+    billingBanner(principal.orgId),
   ]);
+  const billingManager = principal.permissions.has("billing.manage");
   const badges: Record<string, number> = { messages, announcements, packages, bookings, visitors: visitorsOnSite, parking: parkingReview, approvals };
   const sections = visibleNav(principal.permissions, principal.role.category).map((s) => ({
     title: s.title,
@@ -70,6 +73,8 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     ...(principal.permissions.has("resident.manage") ? [{ label: "Add resident", href: `${base}/residents/new`, group: "Action", keywords: "new tenant owner move in" }] : []),
     ...(principal.permissions.has("vendor.manage") ? [{ label: "Add vendor", href: `${base}/vendors/new`, group: "Action", keywords: "new contractor" }] : []),
     ...(principal.permissions.has("member.manage") ? [{ label: "Invite teammate", href: `${base}/settings/members`, group: "Action", keywords: "invite user staff" }] : []),
+    ...(billingManager ? [{ label: "Plan and billing", href: `${base}/settings/billing`, group: "Action", keywords: "subscription invoice upgrade plan usage trial" }] : []),
+    ...(principal.permissions.has("api.manage") ? [{ label: "API keys and webhooks", href: `${base}/settings/developers`, group: "Action", keywords: "api key token webhook developer rest" }] : []),
     { label: "Account security", href: "/account/security", group: "Account", keywords: "password 2fa mfa sessions" },
   ];
   const commands: Command[] = [...sections.flatMap((s) => s.items.map((i) => ({ label: `Go to ${i.label}`, href: i.href, group: s.title ?? "Navigate" }))), ...actions];
@@ -94,6 +99,17 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
           <UserMenu name={session.user.name} email={session.user.email} isPlatformAdmin={session.user.isPlatformAdmin} />
           </div>
         </header>
+        {billing.readOnly ? (
+          <div role="status" className="border-b border-border bg-danger-soft px-4 py-2 text-[13px] text-danger">
+            <strong className="font-semibold">Read-only.</strong> {resident ? "Changes are paused for this building right now; you can still look things up." : billing.reason}
+            {billingManager ? <> <Link className="font-medium underline" href={`${base}/settings/billing`}>Go to billing</Link></> : null}
+          </div>
+        ) : billingManager && (billing.state === "grace" || (billing.state === "trial" && (billing.daysLeft ?? 99) <= 7)) ? (
+          <div role="status" className="border-b border-border bg-warning-soft px-4 py-2 text-[13px] text-warning">
+            {billing.state === "trial" ? `Free trial of ${billing.planName}: ${billing.daysLeft} day${billing.daysLeft === 1 ? "" : "s"} left.` : billing.reason}{" "}
+            <Link className="font-medium underline" href={`${base}/settings/billing`}>{billing.state === "trial" ? "Choose a plan" : "Update billing"}</Link>
+          </div>
+        ) : null}
         {!session.user.mfaEnabled && principal.role.category === "staff" && principal.permissions.has("member.manage") ? (
           <div className="border-b border-border bg-warning-soft px-4 py-2 text-[13px] text-warning">
             Admins should turn on two-factor authentication. <a className="font-medium underline" href="/account/security">Set it up</a>

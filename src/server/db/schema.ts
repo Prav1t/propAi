@@ -158,7 +158,7 @@ export const organizations = pgTable(
     status: text("status").notNull().default("active"),
     kind: text("kind").notNull().default("property_management"),
     timezone: text("timezone").notNull().default("America/Vancouver"),
-    planKey: text("plan_key").notNull().default("trial"),
+    planKey: text("plan_key").notNull().default("professional"), // mirrors subscriptions.plan_key (Iteration 10)
     settings: jsonb("settings").notNull().default({}),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -419,6 +419,7 @@ export const auditLogs = pgTable(
     aiGenerated: boolean("ai_generated").notNull().default(false),
     approvalId: uuid("approval_id"),
     workflowRunId: uuid("workflow_run_id"), // set when an automation rule made the change (Iteration 9)
+    apiKeyId: uuid("api_key_id"), // set when the change came through the REST API (Iteration 10)
     createdAt: createdAt(),
   },
   (t) => [
@@ -626,7 +627,7 @@ export const workOrders = pgTable(
     index("work_orders_unit_idx").on(t.unitId),
     check("wo_status_ck", sql`${t.status} in ('new','acknowledged','assigned','scheduled','in_progress','awaiting_vendor','awaiting_resident','completed','closed','cancelled')`),
     check("wo_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
-    check("wo_source_ck", sql`${t.source} in ('resident','staff','inspection','incident','complaint','system')`),
+    check("wo_source_ck", sql`${t.source} in ('resident','staff','inspection','incident','complaint','system','api')`),
     check("wo_cost_ck", sql`${t.cost} is null or ${t.cost} >= 0`),
   ],
 );
@@ -910,11 +911,13 @@ export const outboxEvents = pgTable(
     causedByRunId: uuid("caused_by_run_id"), // the automation run whose action raised this event, if any
     causedByWorkflowId: uuid("caused_by_workflow_id"),
     chainDepth: integer("chain_depth").notNull().default(0), // automation → event → automation … hops; capped
+    webhooksAt: ts("webhooks_at"), // fanned out to webhook endpoints (Iteration 10)
     createdAt: createdAt(),
   },
   (t) => [
     index("outbox_pending_idx").on(t.createdAt).where(sql`${t.processedAt} is null`),
     index("outbox_automation_pending_idx").on(t.createdAt).where(sql`${t.automationAt} is null`),
+    index("outbox_webhooks_pending_idx").on(t.createdAt).where(sql`${t.webhooksAt} is null`),
   ],
 );
 
@@ -1914,4 +1917,260 @@ export const dailyBriefs = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("daily_briefs_user_date_uq").on(t.orgId, t.userId, t.briefDate)],
+);
+
+/* ───────────────────────── Billing, developer platform, integrations (Iteration 10, RLS) ───────────────────────── */
+
+// one subscription per organization; the billing provider (mock in development, Stripe in production) is the source of
+// truth for paid subscriptions and reaches this row through idempotent billing events
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    planKey: text("plan_key").notNull(),
+    interval: text("interval").notNull().default("month"),
+    status: text("status").notNull(),
+    provider: text("provider").notNull().default("none"), // none (trial) | mock | stripe | manual (set by a platform admin)
+    providerCustomerId: text("provider_customer_id"),
+    providerSubscriptionId: text("provider_subscription_id"),
+    trialEndsAt: ts("trial_ends_at"),
+    trialNoticeSentAt: ts("trial_notice_sent_at"),
+    currentPeriodStart: ts("current_period_start"),
+    currentPeriodEnd: ts("current_period_end"),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    pendingPlanKey: text("pending_plan_key"), // downgrade scheduled for the end of the period
+    pendingInterval: text("pending_interval"),
+    pastDueSince: ts("past_due_since"),
+    limitOverrides: jsonb("limit_overrides").notNull().default({}), // platform-admin deals: { units: 8000, ... }
+    lastPaidCents: integer("last_paid_cents"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("subscriptions_org_uq").on(t.orgId),
+    uniqueIndex("subscriptions_provider_sub_uq").on(t.provider, t.providerSubscriptionId).where(sql`${t.providerSubscriptionId} is not null`),
+    index("subscriptions_customer_idx").on(t.provider, t.providerCustomerId),
+    index("subscriptions_period_idx").on(t.currentPeriodEnd).where(sql`${t.status} in ('active','past_due')`),
+    index("subscriptions_trial_idx").on(t.trialEndsAt).where(sql`${t.status} = 'trialing'`),
+    check("subscriptions_plan_ck", sql`${t.planKey} in ('starter','professional','enterprise')`),
+    check("subscriptions_pending_plan_ck", sql`${t.pendingPlanKey} is null or ${t.pendingPlanKey} in ('starter','professional','enterprise')`),
+    check("subscriptions_interval_ck", sql`${t.interval} in ('month','year')`),
+    check("subscriptions_status_ck", sql`${t.status} in ('trialing','active','past_due','cancelled','expired')`),
+    check("subscriptions_provider_ck", sql`${t.provider} in ('none','mock','stripe','manual')`),
+  ],
+);
+
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    number: text("number").notNull(),
+    provider: text("provider").notNull(),
+    providerInvoiceId: text("provider_invoice_id").notNull(),
+    status: text("status").notNull(),
+    currency: text("currency").notNull().default("CAD"),
+    totalCents: integer("total_cents").notNull(),
+    lines: jsonb("lines").notNull().default([]), // [{ description, quantity, unitCents, amountCents }]
+    periodStart: ts("period_start"),
+    periodEnd: ts("period_end"),
+    hostedUrl: text("hosted_url"),
+    issuedAt: ts("issued_at").notNull().defaultNow(),
+    paidAt: ts("paid_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("invoices_provider_uq").on(t.provider, t.providerInvoiceId),
+    index("invoices_org_idx").on(t.orgId, t.issuedAt),
+    check("invoices_status_ck", sql`${t.status} in ('open','paid','void','uncollectible')`),
+  ],
+);
+
+// daily snapshot of what an organization uses (units, residents, seats, AI and API requests), shown against plan limits
+export const usageRecords = pgTable(
+  "usage_records",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    metric: text("metric").notNull(),
+    day: date("day").notNull(),
+    quantity: integer("quantity").notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("usage_records_uq").on(t.orgId, t.metric, t.day),
+    check("usage_records_metric_ck", sql`${t.metric} in ('properties','units','active_residents','staff_seats','ai_requests','api_requests','webhook_deliveries')`),
+  ],
+);
+
+// every billing-provider event seen, once (idempotency) — org_id is null until the event is matched to an organization
+export const billingEvents = pgTable(
+  "billing_events",
+  {
+    id: id(),
+    orgId: uuid("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    eventId: text("event_id").notNull(),
+    type: text("type").notNull(),
+    payload: jsonb("payload").notNull(),
+    status: text("status").notNull().default("received"),
+    error: text("error"),
+    createdAt: createdAt(),
+    processedAt: ts("processed_at"),
+  },
+  (t) => [
+    uniqueIndex("billing_events_uq").on(t.provider, t.eventId),
+    index("billing_events_org_idx").on(t.orgId, t.createdAt),
+    check("billing_events_status_ck", sql`${t.status} in ('received','processed','ignored','failed')`),
+  ],
+);
+
+// API keys act for the member who created them, narrowed to the key's permissions (and properties); only a hash is stored
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    prefix: text("prefix").notNull(), // shown in lists so people can tell keys apart
+    keyHash: text("key_hash").notNull(),
+    createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    permissions: text("permissions").array().notNull().default(sql`'{}'::text[]`),
+    propertyIds: uuid("property_ids").array().notNull().default(sql`'{}'::uuid[]`), // empty = everything the creator can reach
+    requestsPerMinute: integer("requests_per_minute").notNull().default(120),
+    expiresAt: ts("expires_at"),
+    lastUsedAt: ts("last_used_at"),
+    lastUsedIp: text("last_used_ip"),
+    revokedAt: ts("revoked_at"),
+    revokedByUserId: uuid("revoked_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("api_keys_hash_uq").on(t.keyHash),
+    uniqueIndex("api_keys_prefix_uq").on(t.prefix),
+    index("api_keys_org_idx").on(t.orgId, t.createdAt),
+  ],
+);
+
+// replay store for Idempotency-Key on API writes (kept 24 hours)
+export const apiIdempotency = pgTable(
+  "api_idempotency",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    apiKeyId: uuid("api_key_id").notNull().references(() => apiKeys.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    statusCode: integer("status_code"), // null while the first request is still running
+    responseBody: jsonb("response_body"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("api_idempotency_uq").on(t.apiKeyId, t.key), index("api_idempotency_created_idx").on(t.createdAt)],
+);
+
+export const webhookEndpoints = pgTable(
+  "webhook_endpoints",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    description: text("description"),
+    secretEnc: text("secret_enc").notNull(), // AES-256-GCM; shown once at creation / rotation
+    events: text("events").array().notNull().default(sql`'{}'::text[]`),
+    status: text("status").notNull().default("active"),
+    disabledReason: text("disabled_reason"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    lastSuccessAt: ts("last_success_at"),
+    lastFailureAt: ts("last_failure_at"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("webhook_endpoints_org_idx").on(t.orgId),
+    check("webhook_endpoints_status_ck", sql`${t.status} in ('active','disabled')`),
+  ],
+);
+
+// one event for one endpoint; the payload is frozen at fan-out so retries and replays send the same body
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    endpointId: uuid("endpoint_id").notNull().references(() => webhookEndpoints.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id"), // outbox event; null for test pings and replays
+    eventType: text("event_type").notNull(),
+    payload: jsonb("payload").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: ts("next_attempt_at").defaultNow(),
+    lastStatusCode: integer("last_status_code"),
+    lastError: text("last_error"),
+    deliveredAt: ts("delivered_at"),
+    replayOf: uuid("replay_of"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("webhook_deliveries_event_uq").on(t.endpointId, t.eventId).where(sql`${t.eventId} is not null`),
+    index("webhook_deliveries_due_idx").on(t.nextAttemptAt).where(sql`${t.status} = 'pending'`),
+    index("webhook_deliveries_endpoint_idx").on(t.endpointId, t.createdAt),
+    check("webhook_deliveries_status_ck", sql`${t.status} in ('pending','succeeded','failed')`),
+  ],
+);
+
+export const webhookAttempts = pgTable(
+  "webhook_attempts",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    deliveryId: uuid("delivery_id").notNull().references(() => webhookDeliveries.id, { onDelete: "cascade" }),
+    attempt: integer("attempt").notNull(),
+    statusCode: integer("status_code"),
+    error: text("error"),
+    responseSnippet: text("response_snippet"),
+    durationMs: integer("duration_ms").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("webhook_attempts_delivery_idx").on(t.deliveryId, t.attempt)],
+);
+
+// third-party connections; secrets live encrypted in credentials_enc, never in config
+export const integrations = pgTable(
+  "integrations",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    status: text("status").notNull().default("connected"),
+    config: jsonb("config").notNull().default({}), // non-secret settings shown in the UI (e.g. the sending number)
+    credentialsEnc: text("credentials_enc"),
+    lastUsedAt: ts("last_used_at"),
+    lastError: text("last_error"),
+    connectedByUserId: uuid("connected_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("integrations_org_provider_uq").on(t.orgId, t.provider),
+    check("integrations_status_ck", sql`${t.status} in ('connected','error')`),
+  ],
+);
+
+// platform-admin overrides of feature flags: org_id null = global override
+export const featureFlags = pgTable(
+  "feature_flags",
+  {
+    id: id(),
+    key: text("key").notNull(),
+    orgId: uuid("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull(),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("feature_flags_global_uq").on(t.key).where(sql`${t.orgId} is null`),
+    uniqueIndex("feature_flags_org_uq").on(t.key, t.orgId).where(sql`${t.orgId} is not null`),
+  ],
 );
