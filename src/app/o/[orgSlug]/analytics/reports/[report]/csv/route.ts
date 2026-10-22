@@ -1,5 +1,5 @@
 import { getSession } from "@/server/auth/session";
-import { loadPrincipal } from "@/server/modules/organizations/principal";
+import { orgPrincipalForSession } from "@/server/org-session";
 import { requestMeta } from "@/server/request-meta";
 import { ForbiddenError, NotFoundError } from "@/server/authz/authorize";
 import { availableReports, exportReportCsv, isReportKey } from "@/server/analytics/reports";
@@ -12,7 +12,8 @@ export async function GET(req: Request, ctx: RouteContext<"/o/[orgSlug]/analytic
   const { orgSlug, report } = await ctx.params;
   const session = await getSession();
   if (!session) return new Response("Not found", { status: 404 });
-  const principal = await loadPrincipal(session.user.id, orgSlug);
+  const { principal, decision } = await orgPrincipalForSession(session, orgSlug);
+  if (principal && !decision.ok) return new Response("This organization requires a different sign-in method.", { status: 403 });
   if (!principal || !isReportKey(report)) return new Response("Not found", { status: 404 });
   const tctx = { principal, meta: await requestMeta() };
   if (!availableReports(tctx).includes(report)) return new Response("Not found", { status: 404 });

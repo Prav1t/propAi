@@ -5,6 +5,7 @@ import { FormAlert } from "@/components/ui/form";
 import { getSession } from "@/server/auth/session";
 import { safeNext } from "@/lib/safe-next";
 import { LoginForm } from "./login-form";
+import { SSO_ERRORS, type SsoErrorCode } from "@/server/sso/service";
 
 export const metadata = { title: "Sign in" };
 
@@ -29,7 +30,12 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
       <div className="space-y-4">
         {sp.verified ? <FormAlert kind="success">Email verified. You can sign in now.</FormAlert> : null}
         {sp.reset ? <FormAlert kind="success">Password updated. Sign in with your new password.</FormAlert> : null}
+        {sp.reason === "mfa" ? <FormAlert kind="info">Your organization now requires two-step verification. Sign in again with your authenticator code.</FormAlert> : null}
+        {typeof sp.sso_error === "string" && sp.sso_error in SSO_ERRORS ? <FormAlert>{`Single sign-on didn't complete. ${SSO_ERRORS[sp.sso_error as SsoErrorCode]}`}</FormAlert> : null}
         <LoginForm next={next} />
+        <p className="text-center text-[13px] text-muted">
+          <Link className="text-accent hover:underline" href={next ? `/sso?next=${encodeURIComponent(next)}` : "/sso"}>Sign in with your organization (SSO)</Link>
+        </p>
         {showDemo ? (
           <details className="rounded-[var(--radius-md)] border border-dashed border-border-strong p-3 text-[13px]">
             <summary className="cursor-pointer font-medium text-muted">Demo accounts (development only)</summary>

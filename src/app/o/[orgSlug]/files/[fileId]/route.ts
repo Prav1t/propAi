@@ -1,5 +1,5 @@
 import { getSession } from "@/server/auth/session";
-import { loadPrincipal } from "@/server/modules/organizations/principal";
+import { orgPrincipalForSession } from "@/server/org-session";
 import { openFile } from "@/server/files/service";
 import { requestMeta } from "@/server/request-meta";
 import { ForbiddenError, NotFoundError } from "@/server/authz/authorize";
@@ -11,7 +11,8 @@ export async function GET(_req: Request, ctx: RouteContext<"/o/[orgSlug]/files/[
   const { orgSlug, fileId } = await ctx.params;
   const session = await getSession();
   if (!session) return new Response("Not found", { status: 404 });
-  const principal = await loadPrincipal(session.user.id, orgSlug);
+  const { principal, decision } = await orgPrincipalForSession(session, orgSlug);
+  if (principal && !decision.ok) return new Response("This organization requires a different sign-in method.", { status: 403 });
   if (!principal || !/^[0-9a-f-]{36}$/i.test(fileId)) return new Response("Not found", { status: 404 });
   try {
     const r = await openFile({ principal, meta: await requestMeta() }, fileId);

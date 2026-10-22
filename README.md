@@ -2,7 +2,7 @@
 
 AI-native operations platform for property managers, strata/HOAs, facility teams, concierge desks and residents. The assistant, **[YOUR AI ASSISTANT NAME]**, answers from live records through typed, permission-checked tools, answers rules and procedure questions from your own documents with citations, and prepares changes — work orders, assignments, bookings, packages, visitors, tasks, inspections, incidents, notices and messages — as plans the user approves, edits or cancels. Everything it reads or does is logged and audited.
 
-> **Status: Iteration 10 of 13 complete.**
+> **Status: Iteration 11 of 13 complete.**
 > - **Iteration 1 — foundation:** authentication with MFA, organizations, role-based access scoped to portfolio/property/building/unit, Postgres row-level-security tenant isolation, invitations, settings, audit log.
 > - **Iteration 2 — portfolio core:** portfolios, properties, buildings (stacking plan, bulk unit generation), floors, units, residents (move-in/out history, resident-app invites), staff directory, vendors (contacts, property approvals, vendor-portal invites), permission-aware full-text search and a Cmd/Ctrl-K command palette.
 > - **Iteration 3 — operations core:** maintenance work orders (triage rules, SLA targets and monitor, vendor portal), tasks, inspections, incidents, complaints, file attachments, in-app + email notifications through a transactional outbox.
@@ -13,6 +13,7 @@ AI-native operations platform for property managers, strata/HOAs, facility teams
 > - **Iteration 8 — knowledge base & retrieval (RAG):** documents (PDF, Word, text) and knowledge-base entries are indexed into passages with pgvector; permission-aware hybrid search (meaning + keywords) never returns a passage the reader couldn't open; answers quote and cite their sources; a *Knowledge base* page to write versioned entries, see index status and test questions; policy lines on prepared bookings and emergency procedures on work orders; embedding providers (Voyage, OpenAI, OpenAI-compatible, or an offline demo embedder).
 > - **Iteration 9 — analytics & automation:** a catalog of 24 metrics computed in SQL over the reader's own properties (period-over-period, breakdowns, trends), an *Analytics* page with accessible charts and table views, 10 reports with CSV export and a print layout, an explainable property health score with configurable weights, a WHEN → IF → THEN **automation engine** (11 event triggers + schedules, conditions, 10 actions including a manager-approval step and an assistant-drafted note, loop protection, idempotent runs, audit entries tied to the run), a rule builder with templates, plain-language summaries and a dry run against a past event, "due soon" SLA warnings, a daily operations brief, data-backed insights, and assistant tools that answer numeric questions from the same metric definitions.
 > - **Iteration 10 — billing, API & integrations:** plans as configuration (Starter / Professional / Enterprise with per-unit pricing, limits and included features), a 14-day trial for every new organization, usage metered against limits, a **billing provider abstraction** with a labelled development provider (local checkout, invoices, renewals, proration) and a **Stripe adapter** (Checkout, Customer Portal, verified idempotent webhooks), read-only mode when a subscription lapses (nothing is deleted), scoped **API keys** and a versioned **REST API** (`/api/v1`: cursor pagination, filters, idempotency keys, one error shape, per-key rate limits, an OpenAPI 3.1 document and a reference page generated from the same route table), **signed outgoing webhooks** with retries, auto-disable and a replayable delivery log (SSRF-safe delivery), integrations (Slack, Microsoft Teams — also as an automation action — Twilio SMS, Resend/SendGrid email), **feature flags**, and a platform console with plans, estimated revenue and per-organization deals.
+> - **Iteration 11 — security hardening:** a threat model with a route-by-route review and a finding log ([`docs/security/threat-model.md`](docs/security/threat-model.md)); attack-style test suites (an IDOR sweep over every detail page and role, privilege escalation, cross-tenant writes, CSRF, open redirects, tampering); **single sign-on** with OpenID Connect (Google Workspace, Microsoft Entra ID, Okta or any provider) with DNS-verified domains and optional just-in-time membership; organizations can **require SSO and/or two-step verification**; a recent sign-in ("Confirm it's you") for sensitive changes; one-time TOTP codes; an absolute session lifetime; trusted-proxy client addresses; shared **Redis rate limits**; a strict **nonce-based CSP** and cross-site write guard; a **tamper-evident audit log** (hash chain, verification, checkpoints); **encryption key rotation**; **privacy tools** (personal data export, erasure with legal holds, retention settings, consent history); dependency and secret scanning with an SBOM in CI.
 >
 > See [`docs/roadmap.md`](docs/roadmap.md) and [`docs/iterations/`](docs/iterations/).
 
@@ -160,6 +161,23 @@ Things to try:
 - **Calendar:** *Calendar* merges scheduled work, inspections, PM due dates, bookings, visitors, shifts and task due dates in day/week/month/agenda views, filtered to what you're allowed to see.
 - Press **Ctrl/Cmd-K** for navigation and quick actions ("Create work order", "Show overdue work orders", "Report incident"…); sign in as `pm@demo.test` and notice Pacific Heights has disappeared everywhere.
 
+## Security and privacy (walkthrough)
+
+Sign in as `admin@demo.test`:
+
+- **Settings → Security:**
+  - Choose who must use two-step verification, and whether staff must sign in with SSO. Turn on two-step for your own account first.
+  - Connect an OpenID Connect provider: Google Workspace, Microsoft Entra ID (tenant ID), Okta (domain) or any issuer URL.
+  - Prove a domain with a DNS TXT record.
+  - Optionally, let people from that domain join with a chosen staff role.
+- **Sign in with SSO:** on the sign-in page, *Sign in with your organization (SSO)* finds the provider from the work email.
+- **Re-confirmation:** creating an API key, rotating a webhook secret, connecting an integration, changing a role, billing or security settings, or exporting or erasing personal data needs a sign-in from the last 10 minutes. Otherwise you'll be asked to *Confirm it's you* and then sent straight back.
+- **Settings → Privacy:**
+  - Find a resident and export their data as JSON (a download link lasts 7 days).
+  - Place a legal hold, or erase their data. Building records stay, without their name.
+  - Set retention for messages, visitor logs, parking evidence, assistant chats and the audit log.
+- **Settings → Audit log → Verify the audit log** recomputes the organization's hash chain. Platform admins can verify every chain from `/admin`.
+
 ## Tests
 
 ```bash
@@ -169,8 +187,14 @@ npm run test:e2e           # Playwright against `npm run dev` (starts it if not 
 npm run test:e2e:batched   # the same suite in batches, a fresh dev server per batch (machines with ≤ 8 GB of memory)
 npm run ai:eval            # assistant evaluation suite against the configured provider (demo model without a key)
 npm run ai:ask -- --as pm@demo.test "Which vendor has been the slowest this month?"   # ask from the terminal
+npm run test:security      # just the attack-style suites in tests/security (part of test:integration)
+npm run security:audit     # production dependencies: fails on high/critical advisories
+npm run security:secrets   # tracked files: fails on anything that looks like a real credential
+npm run security:sbom      # CycloneDX SBOM of production dependencies → sbom.cdx.json
 npm run lint && npm run typecheck && npm run build
 ```
+
+`REDIS_TEST_URL=redis://127.0.0.1:6379/15 npm run test:integration` also runs the shared rate-limiter tests against Redis. The SSO tests run their own OpenID Connect provider on 127.0.0.1 (the test environment sets `OIDC_ALLOW_HTTP_ISSUERS=true`, which production refuses).
 
 Integration tests connect as the **runtime role** and prove tenant isolation at the database level (cross-org reads, writes, moves and audit tampering all fail). Override the test database with `TEST_DATABASE_URL` / `TEST_MIGRATION_DATABASE_URL`.
 
@@ -178,7 +202,17 @@ E2E notes: sign-in is rate-limited per IP, so the Playwright web server is start
 
 ## Environment variables
 
-See [`.env.example`](.env.example). Required: `DATABASE_URL`, `APP_ENCRYPTION_KEY`; `MIGRATION_DATABASE_URL` for migrate/seed. `TRUST_PROXY=true` only behind a reverse proxy that sets `X-Forwarded-For`.
+See [`.env.example`](.env.example). Required: `DATABASE_URL`, `APP_ENCRYPTION_KEY`; `MIGRATION_DATABASE_URL` for migrate/seed.
+
+- **Client addresses (rate limits, audit, sign-in history):** set `TRUSTED_PROXY_HOPS` to the number of reverse proxies in front of the app that append to `X-Forwarded-For` (usually `1`; `2` for a CDN plus a load balancer), or `CLIENT_IP_HEADER` when your proxy sets its own header (`cf-connecting-ip`). Only the address your proxies added is used; anything a client writes is ignored. Without either, production logs a warning at start-up. (`TRUST_PROXY=true` from older configs means one proxy.)
+- **Shared rate limits:** `REDIS_URL` makes sign-in, MFA, invitation, assistant and API-key limits hold across all app instances (sliding window). Without it, limits are per instance. If Redis becomes unreachable, each instance keeps limiting on its own rather than not at all.
+- **Encryption keys:** secrets at rest (MFA secrets, webhook signing secrets, integration and SSO credentials) are sealed with `APP_ENCRYPTION_KEY`, named by `APP_ENCRYPTION_KEY_ID` (default `k1`). To rotate:
+  1. Move the old key to `APP_ENCRYPTION_OLD_KEYS=k1:<base64>`.
+  2. Set a new `APP_ENCRYPTION_KEY` and `APP_ENCRYPTION_KEY_ID=k2`, then deploy.
+  3. Run `npm run keys:rotate`, then `npm run keys:status` until nothing is left on `k1`.
+  4. Remove the old key.
+- **Sessions:** they slide while used, but end `SESSION_ABSOLUTE_DAYS` (default 90) after sign-in.
+- **Single sign-on:** configured per organization under *Settings → Security* (no environment variables). Register `<APP_URL>/sso/callback` as the redirect URI with your identity provider. `OIDC_ALLOW_HTTP_ISSUERS=true` is only for local test providers and is refused in production.
 
 - **Attachments:** `FILE_STORAGE=local` (default; files under `FILE_STORAGE_DIR`, default `./.data/uploads`, a named volume in Docker) or `FILE_STORAGE=s3` with `S3_BUCKET`, `S3_REGION`, optional `S3_ENDPOINT` for MinIO/R2, `S3_PUBLIC_ENDPOINT` when browsers reach the bucket on a different host than the app, `S3_SSE=none` for MinIO without a KMS, and credentials from the standard AWS chain. `S3_TEST_ENDPOINT=http://… npm run test:integration` also runs the S3 adapter test against that server.
 - **Guest pass links** are built from `APP_URL`, so set it to the public HTTPS origin in production.
@@ -195,7 +229,7 @@ See [`.env.example`](.env.example). Required: `DATABASE_URL`, `APP_ENCRYPTION_KE
 3. Run the app with the **runtime role** URL, a unique `APP_ENCRYPTION_KEY` from your secret manager, `MAIL_PROVIDER=smtp` (or `resend`/`sendgrid`), `BILLING_PROVIDER=stripe` with its keys and prices, `APP_URL` set to your HTTPS origin, behind TLS. Cookies are `__Host-` prefixed and `Secure` in production.
 4. Use managed Postgres with point-in-time recovery. A full production runbook (backups, monitoring, key rotation) is Iteration 13.
 
-The in-memory rate limiter (sign-in and the per-key API limits) is per instance; run a single instance until the Redis adapter lands. With local file storage, also keep a single instance (or switch to `FILE_STORAGE=s3`).
+For more than one app instance, set `REDIS_URL` (shared rate limits) and use `FILE_STORAGE=s3`. Set `TRUSTED_PROXY_HOPS` for your proxy chain. Security headers (a nonce-based CSP, HSTS, frame and referrer policies) are set by the app, so a proxy shouldn't overwrite them.
 
 ## AI configuration
 

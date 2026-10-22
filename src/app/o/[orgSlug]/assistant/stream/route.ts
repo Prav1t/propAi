@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getSession } from "@/server/auth/session";
-import { loadPrincipal } from "@/server/modules/organizations/principal";
+import { orgPrincipalForSession } from "@/server/org-session";
 import { requestMeta } from "@/server/request-meta";
 import { ForbiddenError, NotFoundError } from "@/server/authz/authorize";
 import { ValidationError } from "@/server/modules/context";
@@ -23,8 +23,9 @@ export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assista
   const { orgSlug } = await ctx.params;
   const session = await getSession();
   if (!session) return jsonError(401, "Sign in first.");
-  const principal = await loadPrincipal(session.user.id, orgSlug);
+  const { principal, decision } = await orgPrincipalForSession(session, orgSlug);
   if (!principal) return jsonError(404, "Not found.");
+  if (!decision.ok) return jsonError(403, "This organization requires a different sign-in method. Reload the page.");
   let input: z.infer<typeof body>;
   try {
     input = body.parse(await req.json());

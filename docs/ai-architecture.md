@@ -245,6 +245,20 @@ Then two rankings run in one transaction — cosine similarity over the HNSW ind
 
 **Relationship to the assistant's plans.** Assistant plans (§14) are approved by the person who asked; automation approvals go to whoever holds a named role at the property (the "second person" sign-off deferred from Iteration 7). Both re-authorize at execution time, both write audit entries tied to their origin (`approval_id` for plans, `workflow_run_id` for runs), and both run changes through the same domain services.
 
+## 17. Security and privacy (Iteration 11)
+
+- **Policy:** the assistant stream applies the organization's sign-in policy like every page. A session that doesn't meet the organization's SSO/MFA requirement gets a 403 and must sign in again.
+- **Privacy:**
+  - conversations remain owner-only under row-level security;
+  - a privacy manager's export includes the person's own assistant conversations (user and assistant turns), and erasure deletes them;
+  - retention can delete conversations older than N days.
+
+  Both run in the system context, pinned to the organization, after the privacy permission check.
+- **Prompt injection:**
+  - the controls are unchanged: tool results are data, every change is a prepared plan a person approves, and approval re-checks permissions;
+  - the evaluation suite's injection case still passes;
+  - the threat model (`docs/security/threat-model.md` §4.6) records this boundary.
+
 ## 16. Plans, read-only mode and the assistant (Iteration 10)
 
 - The assistant is a plan feature (`ai_assistant`, in every plan today) and its monthly allowance comes from the plan (`entitlements.limits.ai_requests`); the refusal names which limit was reached and where an admin can change it.

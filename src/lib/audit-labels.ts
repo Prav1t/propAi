@@ -11,6 +11,25 @@ const LABELS: Record<string, string> = {
   "member.role_changed": "changed a member's role",
   "member.deactivated": "deactivated a member",
   "member.reactivated": "reactivated a member",
+  // Iteration 11: security and privacy
+  "member.joined_via_sso": "joined through single sign-on",
+  "user.sso_signed_in": "signed in with single sign-on",
+  "security.policy_changed": "changed the sign-in requirements",
+  "sso.connection_created": "set up single sign-on",
+  "sso.connection_updated": "changed single sign-on settings",
+  "sso.connection_enabled": "switched single sign-on on",
+  "sso.connection_disabled": "switched single sign-on off",
+  "sso.domain_added": "added a sign-in domain",
+  "sso.domain_verified": "verified a sign-in domain",
+  "sso.domain_removed": "removed a sign-in domain",
+  "privacy.exported": "exported a person's data",
+  "privacy.export_downloaded": "downloaded a personal data export",
+  "privacy.erased": "erased a person's data",
+  "privacy.erasure_blocked": "tried to erase data under legal hold",
+  "privacy.hold_placed": "placed a legal hold",
+  "privacy.hold_released": "released a legal hold",
+  "privacy.retention_changed": "changed retention settings",
+  "privacy.retention_applied": "deleted records past their retention period",
 };
 
 export const describeAudit = (action: string) => LABELS[action] ?? action.replace(/[._]/g, " ");

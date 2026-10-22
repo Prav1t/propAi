@@ -187,6 +187,37 @@ Analytics indexes (`0019`): `work_orders (org_id, completed_at)` where completed
 
 New columns: `outbox_events.webhooks_at` (fan-out done; backfilled for history in `0021`) with a partial pending index; `audit_logs.api_key_id`; `work_orders.source` accepts `api` (`0022`); `organizations.plan_key` now mirrors `subscriptions.plan_key` (default `professional`). Migration `0021` gives every organization that existed before billing an active, support-managed Professional subscription.
 
+### Security & privacy (🔒, Iteration 11)
+
+| Table | Purpose / key columns |
+|---|---|
+| `org_security_policies` | one per organization: `require_mfa` off/staff/everyone, `require_sso` (staff), `updated_by_user_id` |
+| `sso_connections` | one per organization (unique `org_id`): `provider` google/microsoft/okta/oidc, `issuer`, `client_id`, `client_secret_enc` (sealed), `status` active/disabled, `jit_role_id` + `jit_property_id` (just-in-time membership; null = invited members only), `last_login_at` |
+| `sso_domains` | `(org_id, domain)` unique, lower-case: `verification_token` (published as a TXT record), `verified_at`, `last_checked_at`, `last_check_error`. A partial unique index lets only one organization hold a verified domain |
+| `sso_login_states` | global, single use, 10 minutes: `id` = sha256(state), `connection_id`, `nonce`, `code_verifier` (PKCE), `purpose` login/reauth, `user_id` (reauth), `next` |
+| `privacy_requests` | `kind` export/erasure, `resident_id`, `user_id`, `subject_label` (name at the time; "Former resident" after erasure), `status` completed/blocked/failed, `reason`, `result` jsonb (counts; the export's storage key while it can be downloaded), `requested_by_user_id` |
+| `legal_holds` | `resident_id` and/or `user_id`, `reason`, `created_by_user_id`, `released_at`/`released_by_user_id`. An active hold blocks erasure and retention deletes |
+| `retention_policies` | one per organization: `messages_days`, `visitors_days`, `parking_evidence_days`, `assistant_days`, `audit_days` (≥ 365); null keeps |
+| `consents` | append-only: `user_id`/`resident_id`, `channel` email/sms, `purpose`, `granted`, `source` preferences/admin/signup, `recorded_by_user_id`, `ip` |
+| `audit_chain_heads` | one row per chain (`chain_key` = organization id or `platform`): `seq`, `hash`. Written only by the audit trigger |
+| `audit_checkpoints` | `chain_key`, `seq`, `hash`: daily anchors (also logged), and the boundary when retention prunes old entries |
+
+**New columns:**
+
+- **`users.mfa_last_used_step`:** a TOTP code is accepted once.
+- **`sessions.amr`, `sessions.reauth_at`, `sessions.sso_connection_id`:** how the session was established and when it was last confirmed.
+- **`audit_logs.seq`, `prev_hash`, `hash`:** filled by the `audit_chain` trigger.
+
+**Database functions (migration `0024`):**
+
+| Function | What it does |
+|---|---|
+| `audit_entry_hash(audit_logs)` | SHA-256 over a canonical JSON of every field plus the previous hash |
+| `audit_chain_append()` | `BEFORE INSERT` trigger, SECURITY DEFINER; locks the chain head |
+| `audit_no_update()` | `BEFORE UPDATE` trigger: entries are immutable |
+| `audit_prune(org, before)` | Retention, never less than 365 days; records the boundary checkpoint |
+| `audit_verify(chain)` | Returns entries checked and the first problem |
+
 ### Full-text search
 
 Generated `tsvector` columns named `search` (config `simple`, so names, codes and unit numbers aren't stemmed) with GIN indexes on `properties`, `buildings`, `units`, `residents` (name, email, phone digits), `vendors` (name, legal name, email, trades), `documents` (title, description) and `assets` (name, tag, make, model, serial, location, category). Queries use prefix matching built by `toPrefixQuery()`, which strips every tsquery operator from user input; hyphenated codes such as `RTU-4` match either joined (`rtu4`) or by part (`rtu & 4`), the way Postgres indexes them. `immutable_array_join(text[])` exists because `array_to_string` isn't immutable and can't be used in a generated column.
@@ -227,6 +258,8 @@ app_api_key_hash()   -- current_setting('app.api_key_hash')   (REST API key look
 | Community tables (`amenities`, `bookings`, `packages`, `announcements`, `message_threads`, `messages`, `documents`, … — 12 tables, migration `0009`) | read: `org_id = app_org()` (or platform admin / worker); write: `org_id = app_org()` only. Who-sees-what inside an org (a resident's own unit, audience, internal notes) is enforced in the services and covered by integration tests |
 
 | Billing, API, webhooks, integrations (migration `0021`) | `subscriptions`, `invoices`, `usage_records`, `api_keys`, `api_idempotency`, `webhook_endpoints`, `webhook_deliveries`, `webhook_attempts`, `integrations`: the standard tenant rule. **Plus** `api_key_lookup`: with no org context, a transaction that sets `app.api_key_hash` may SELECT exactly the key with that hash. `billing_events`: read in org context (or platform admin / system); written by the system context (provider webhooks arrive before the organization is known). `feature_flags`: everyone reads global rows and their own organization's; only a platform-admin context may insert, update or delete |
+
+| Security & privacy (migration `0024`) | `org_security_policies`, `sso_connections`, `sso_domains`, `privacy_requests`, `legal_holds`, `retention_policies`, `consents`: the standard tenant rule; the system context may also write (SSO sign-in, retention). `audit_chain_heads`: readable by platform admins and the system context; the app role has no write grants (only the SECURITY DEFINER trigger writes). `audit_checkpoints`: written by the system context, readable by the organization it belongs to. `ai_conversations` / `ai_messages` stay owner-only for people; the system context may reach them within one organization (privacy requests and retention). A test now fails if any table with an `org_id` column lacks RLS |
 
 Migration `0002_rls_strict_org_context` fixed a leak found during Iteration 1 testing: inside org A, a user could see their own membership in org B. Covered by a regression test in `tests/integration/tenant-isolation.test.ts`.
 

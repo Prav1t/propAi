@@ -7,7 +7,7 @@ import { amenities, bookings, complaints, incidents, outboxEvents, packages, web
 import { authorize, NotFoundError } from "../authz/authorize";
 import { auditAs, tenantTx, ValidationError, type TenantCtx } from "../modules/context";
 import { emitSystem } from "../modules/ops/core";
-import { decrypt, encrypt } from "../auth/crypto";
+import { seal, unseal } from "../keyring";
 import { env, isProd } from "../env";
 import { log } from "../log";
 import { assertFeature, loadEntitlements } from "../billing/entitlements";
@@ -105,7 +105,7 @@ export async function createEndpoint(ctx: TenantCtx, input: z.input<typeof endpo
     const [{ n }] = await tx.select({ n: count() }).from(webhookEndpoints).where(eq(webhookEndpoints.orgId, ctx.principal.orgId));
     if (n >= 20) throw new ValidationError("An organization can have at most 20 webhook endpoints.");
     const [e] = await tx.insert(webhookEndpoints).values({
-      orgId: ctx.principal.orgId, url, description: data.description, events: [...new Set(data.events)], secretEnc: encrypt(secret, env().APP_ENCRYPTION_KEY), createdByUserId: ctx.principal.userId,
+      orgId: ctx.principal.orgId, url, description: data.description, events: [...new Set(data.events)], secretEnc: seal(secret), createdByUserId: ctx.principal.userId,
     }).returning();
     await auditAs(tx, ctx, "webhook.endpoint_created", "webhook_endpoint", e.id, undefined, { url, events: e.events });
     return { id: e.id, secret };
@@ -145,7 +145,7 @@ export async function rotateSecret(ctx: TenantCtx, id: string): Promise<string> 
   const secret = generateWebhookSecret();
   await tenantTx(ctx, async (tx) => {
     await loadEndpoint(tx, ctx, id);
-    await tx.update(webhookEndpoints).set({ secretEnc: encrypt(secret, env().APP_ENCRYPTION_KEY) }).where(eq(webhookEndpoints.id, id));
+    await tx.update(webhookEndpoints).set({ secretEnc: seal(secret) }).where(eq(webhookEndpoints.id, id));
     await auditAs(tx, ctx, "webhook.secret_rotated", "webhook_endpoint", id);
   });
   return secret;
@@ -277,7 +277,7 @@ export async function attemptDelivery(id: string, now = new Date(), opts: { forc
   let snippet: string | null = null;
   const t0 = Date.now();
   try {
-    const secret = decrypt(e.secretEnc, env().APP_ENCRYPTION_KEY);
+    const secret = unseal(e.secretEnc);
     const res = await safePost(e.url, body, {
       "content-type": "application/json", "user-agent": `${BRAND.shortName}-Webhooks/1.0`,
       "webhook-id": d.id, "webhook-timestamp": String(ts), "webhook-signature": signWebhook(secret, ts, body),

@@ -69,6 +69,9 @@ export const PERMISSIONS = {
   "billing.manage": { module: "organization", description: "Choose the plan, see usage and invoices, manage the subscription" },
   "api.manage": { module: "developers", description: "Create API keys and webhook endpoints" },
   "integration.manage": { module: "developers", description: "Connect Slack, Microsoft Teams, Twilio and other integrations" },
+  // security and privacy (Iteration 11)
+  "security.manage": { module: "organization", description: "Configure single sign-on, verified domains and MFA/SSO requirements" },
+  "privacy.manage": { module: "organization", description: "Export or erase a person's data, place legal holds, set retention" },
 } as const satisfies Record<string, { module: string; description: string }>;
 
 export type Permission = keyof typeof PERMISSIONS;

@@ -2,6 +2,8 @@
 import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/server/auth/session";
+import { requireRecentAuth } from "@/server/reauth";
+import { verifyAllAuditChains } from "@/server/audit-integrity";
 import { adminSetOrganizationStatus } from "@/server/modules/organizations/service";
 import { adminSetFlag, adminUpdateSubscription } from "@/server/billing/admin";
 import { requestMeta } from "@/server/request-meta";
@@ -9,9 +11,11 @@ import { str, toActionError, type ActionState } from "@/server/actions";
 import { isPlanKey, LIMITS, type LimitKey } from "@/config/plans";
 import type { LimitOverrides } from "@/lib/billing";
 
+// platform administration: platform admins only, with a recent sign-in (F-09)
 async function admin() {
   const s = await requireSession();
   if (!s.user.isPlatformAdmin) notFound();
+  await requireRecentAuth("/admin");
   return s.user.id;
 }
 
@@ -62,4 +66,15 @@ export async function updateSubscriptionAction(orgId: string, _: ActionState, fd
   }
   revalidatePath("/admin", "layout");
   return { ok: true, message: "Subscription updated." };
+}
+
+// every audit chain, recomputed (read-only, so no recent sign-in needed)
+export async function verifyAllAuditAction(_: ActionState): Promise<ActionState> {
+  const s = await requireSession();
+  if (!s.user.isPlatformAdmin) notFound();
+  const chains = await verifyAllAuditChains();
+  const bad = chains.filter((c) => c.problem);
+  const total = chains.reduce((n, c) => n + c.checked, 0);
+  if (bad.length) return { error: bad.map((c) => `${c.chainKey}: entry ${c.problemSeq} — ${c.problem}`).join("\n") };
+  return { ok: true, message: `${chains.length} chains, ${total} entries: all intact.` };
 }

@@ -2,10 +2,37 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, prototype]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans the history, not just the tree
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # production dependencies: no known high or critical advisories (development tools are reported, not gated)
+      - run: npm run security:audit
+      - run: npm audit --audit-level=critical
+      - run: npm run security:secrets
+      - name: gitleaks (history)
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.24.0 detect --source /repo --config /repo/.gitleaks.toml --redact --verbose
+      - name: SBOM (CycloneDX)
+        run: npm run security:sbom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -17,12 +44,19 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       DATABASE_URL: postgres://propai_app:propai_app@localhost:5432/propai
       MIGRATION_DATABASE_URL: postgres://propai:propai@localhost:5432/propai
       APP_URL: http://localhost:3000
+      # CI-only test key (not used anywhere real)
       APP_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       MAIL_PROVIDER: console
+      REDIS_TEST_URL: redis://localhost:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,7 +75,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
-      - run: npm run test:integration
+      - run: npm run test:integration # includes tests/security
       - run: npm run db:migrate && npm run db:seed
       - run: npm run build
       - name: E2E

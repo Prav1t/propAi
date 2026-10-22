@@ -12,9 +12,15 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx --conditions=react-server scripts/seed.ts",
     "db:reset": "tsx scripts/reset.ts && npm run db:migrate && npm run db:seed",
+    "security:secrets": "tsx scripts/secret-scan.ts",
+    "security:audit": "npm audit --omit=dev --audit-level=high",
+    "security:sbom": "npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json",
+    "keys:status": "tsx --conditions=react-server scripts/rotate-keys.ts",
+    "keys:rotate": "tsx --conditions=react-server scripts/rotate-keys.ts --rotate",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:security": "vitest run --project integration tests/security",
     "test:e2e": "playwright test",
     "test:e2e:batched": "bash scripts/e2e-batched.sh",
     "worker": "tsx --conditions=react-server scripts/worker.ts",
@@ -27,9 +33,12 @@
     "@node-rs/argon2": "^2.2.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.3",
+    "ioredis": "5.11.1",
+    "jose": "6.2.12",
     "mammoth": "^1.13.0",
-    "next": "16.3.6",
+    "next": "16.3.8",
     "nodemailer": "^10.0.10",
+    "openid-client": "6.8.8",
     "otplib": "^12.0.1",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",
@@ -51,13 +60,18 @@
     "dotenv": "^18.0.3",
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
-    "eslint-config-next": "16.3.6",
+    "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.3"
   },
   "engines": {
     "node": ">=20.9"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2",
+    "vite": "8.3.4"
   }
 }

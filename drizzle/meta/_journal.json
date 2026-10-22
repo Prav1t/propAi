@@ -162,6 +162,20 @@
       "when": 1792394270694,
       "tag": "0022_work_order_api_source",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792653346626,
+      "tag": "0023_security_privacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792653381106,
+      "tag": "0024_rls_security_privacy",
+      "breakpoints": true
     }
   ]
 }

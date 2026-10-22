@@ -48,6 +48,8 @@ beforeAll(async () => {
   await drainOutbox();
 });
 afterAll(async () => {
+  // amenities this file created stay out of other files' way ("the gym" must keep meaning the seeded one)
+  await ownerPool.query("update amenities set active = false where name in ('Shared Gym')");
   await closeDb();
   await ownerPool.end();
 });

@@ -231,8 +231,12 @@ export async function deleteResident(ctx: TenantCtx, id: string) {
     await assertCanManageResident(ctx, tx, id);
     const [before] = await tx.select().from(residents).where(eq(residents.id, id));
     if (before.userId) {
-      // remove their resident access in this org too
-      await tx.update(memberships).set({ status: "deactivated" }).where(and(eq(memberships.orgId, p.orgId), eq(memberships.userId, before.userId)));
+      // remove their resident access in this org too — only resident memberships: the same person may also be staff
+      // or an admin, and managing residents must not reach those (finding F-02)
+      await tx.update(memberships).set({ status: "deactivated" }).where(and(
+        eq(memberships.orgId, p.orgId), eq(memberships.userId, before.userId),
+        inArray(memberships.roleId, tx.select({ id: roles.id }).from(roles).where(eq(roles.category, "resident"))),
+      ));
     }
     await tx.delete(residents).where(eq(residents.id, id));
     await auditAs(tx, ctx, "resident.deleted", "resident", id, before);

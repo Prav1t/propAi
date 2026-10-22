@@ -10,6 +10,8 @@ import { clearSessionCookie, getSession, MFA_COOKIE, setMfaCookie, setSessionCoo
 import { requestMeta } from "@/server/request-meta";
 import { formValues, str, toActionError, zodFieldErrors, type ActionState } from "@/server/actions";
 import { safeNext } from "@/lib/safe-next";
+import { rateLimiter } from "@/server/auth/rate-limit";
+import { findConnection, SSO_ERRORS, startSsoLogin } from "@/server/sso/service";
 
 export async function loginAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const values = formValues(fd, ["email"]);
@@ -90,4 +92,20 @@ export async function logoutAction(): Promise<void> {
   if (s) await revokeSession(s.sessionId);
   await clearSessionCookie();
   redirect("/login");
+}
+
+// single sign-on by work email: returns the identity provider URL; the browser navigates there itself
+// (a form POST that redirects off-site would be blocked by the CSP's form-action)
+export async function startSsoAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const email = emailSchema.safeParse(str(fd, "email"));
+  if (!email.success) return { fieldErrors: { email: "Enter your work email." }, values: { email: str(fd, "email") } };
+  const rl = await rateLimiter().hit(`sso-start:${(await requestMeta()).ip ?? "unknown"}`, 30, 15 * 60_000);
+  if (!rl.allowed) return { error: "Too many attempts. Please wait a few minutes and try again." };
+  const c = await findConnection({ email: email.data });
+  if (!c) return { error: SSO_ERRORS.no_connection, values: { email: email.data } };
+  try {
+    return { ok: true, data: { url: await startSsoLogin(c, { next: safeNext(str(fd, "next")), loginHint: email.data }) } };
+  } catch {
+    return { error: "Your organization's identity provider isn't answering. Try again shortly.", values: { email: email.data } };
+  }
 }

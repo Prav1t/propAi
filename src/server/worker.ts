@@ -8,9 +8,12 @@ import { deliverDailyBriefs } from "./analytics/brief";
 import { billingTick, snapshotUsage } from "./billing/service";
 import { deliverDueWebhooks, fanOutWebhookEvents } from "./webhooks/service";
 import { purgeIdempotencyKeys } from "./api/maintenance";
+import { checkpointAuditChains } from "./audit-integrity";
+import { purgeSsoStates } from "./sso/service";
+import { applyRetention, purgeExpiredExports } from "./privacy/service";
 import { log } from "./log";
 
-const g = globalThis as unknown as { __workerTimer?: ReturnType<typeof setInterval>; __lastHourly?: number };
+const g = globalThis as unknown as { __workerTimer?: ReturnType<typeof setInterval>; __lastHourly?: number; __lastDaily?: number };
 const HOUR = 3600_000;
 
 // one tick: time-based jobs first (they emit events), then deliver pending events
@@ -42,6 +45,16 @@ export async function workerTick() {
       g.__lastHourly = Date.now();
       usage = await snapshotUsage();
       await purgeIdempotencyKeys();
+      // Iteration 11: audit chain checkpoints, abandoned SSO sign-ins
+      await checkpointAuditChains();
+      await purgeSsoStates();
+    }
+    // Iteration 11: retention settings and expired privacy exports, once a day
+    if (!g.__lastDaily || Date.now() - g.__lastDaily > 24 * HOUR) {
+      g.__lastDaily = Date.now();
+      const retained = await applyRetention();
+      const exports = await purgeExpiredExports();
+      if (Object.keys(retained).length || exports) log.info("worker.retention", { ...retained, exports });
     }
     const billed = billing.notices + billing.expired + billing.renewed;
     if (breached || warned || published || reminded || pm || scheduled || automated || briefs || swept || delivered || indexed || billed || fanned || hooks) {

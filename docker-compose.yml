@@ -26,6 +26,17 @@ services:
     image: axllent/mailpit:latest
     ports: ["8025:8025", "1025:1025"]
 
+  # shared rate limits (sign-in, MFA, API keys) across app instances
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # optional S3-compatible storage (profile "s3"); the bucket is created by minio-init
   minio:
     image: minio/minio:latest
@@ -89,12 +100,16 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-propai}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-propai-minio}
       PACKAGE_REMINDER_DAYS: ${PACKAGE_REMINDER_DAYS:-3}
+      REDIS_URL: redis://redis:6379
+      # the app is reached directly here; behind a load balancer set this to the number of proxies
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
     ports: ["3000:3000"]
     volumes:
       - uploads:/app/.data/uploads
     depends_on:
       migrate: { condition: service_completed_successfully }
       mailpit: { condition: service_started }
+      redis: { condition: service_healthy }
 
 volumes:
   pgdata:

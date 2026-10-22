@@ -1,0 +1,18 @@
+# gitleaks configuration: the default rules, plus allow-listed development-only values that are public by design
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Development and test fixtures (never valid in production)"
+regexes = [
+  # seeded demo API key (refused in production; see scripts/seed-billing.ts)
+  '''ak_demokey1_DEVELOPMENT-ONLY-demo-api-key-do-not-use-00''',
+  # test/CI encryption key (32 bytes "0123456789abcdef0123456789abcdef")
+  '''MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=''',
+  # local database URLs with throwaway role passwords
+  '''postgres://propai(_app)?:propai(_app)?@localhost''',
+]
+paths = [
+  '''drizzle/meta/.*\.json''',
+  '''package-lock\.json''',
+]

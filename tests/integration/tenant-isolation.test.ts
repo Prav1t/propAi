@@ -17,7 +17,9 @@ const OPS_TABLES = ["org_counters", "sla_policies", "triage_rules", "work_orders
   // iteration 10: billing (seeded for both organizations)
   "subscriptions", "invoices", "usage_records", "billing_events"];
 // iteration 10 tables that start empty for the second tenant (keys, webhooks, integrations): read isolation still applies
-const PLATFORM_TABLES = ["api_keys", "api_idempotency", "webhook_endpoints", "webhook_deliveries", "webhook_attempts", "integrations"];
+const PLATFORM_TABLES = ["api_keys", "api_idempotency", "webhook_endpoints", "webhook_deliveries", "webhook_attempts", "integrations",
+  // iteration 11: security and privacy
+  "org_security_policies", "sso_connections", "sso_domains", "privacy_requests", "legal_holds", "retention_policies", "consents"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES, ...PLATFORM_TABLES];
 
 let A: string; // Pacific Properties
@@ -46,6 +48,19 @@ describe("database role", () => {
   it("runtime role is neither superuser nor BYPASSRLS", async () => {
     const { rows } = await appPool.query("select rolsuper, rolbypassrls from pg_roles where rolname = current_user");
     expect(rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+  });
+  it("every table with an org_id column has row-level security (catches tables added later)", async () => {
+    const { rows } = await ownerPool.query(`select distinct c.table_name from information_schema.columns c join pg_class p on p.relname = c.table_name and p.relkind = 'r'
+      where c.table_schema = 'public' and c.column_name = 'org_id' and not p.relrowsecurity order by 1`);
+    expect(rows.map((r) => r.table_name)).toEqual([]);
+  });
+  it("organization SSO and privacy settings can't be planted in another organization", async () => {
+    // each refused statement aborts its transaction, so one attempt per transaction
+    const attempt = (sql: string, params: unknown[]) => asApp({ orgId: A, userId: adminId }, (q) => q(sql, params));
+    await expect(attempt("insert into sso_connections (org_id, provider, issuer, client_id, client_secret_enc) values ($1, 'oidc', 'https://evil.example', 'x', 'v2.k1.a.b.c')", [B])).rejects.toThrow(/row-level security/);
+    await expect(attempt("insert into org_security_policies (org_id, require_mfa) values ($1, 'off')", [B])).rejects.toThrow(/row-level security/);
+    await expect(attempt("insert into legal_holds (org_id, user_id, reason) values ($1, $2, 'x')", [B, adminId])).rejects.toThrow(/row-level security/);
+    expect((await attempt("update retention_policies set audit_days = 365 where org_id = $1", [B])).rowCount).toBe(0);
   });
   it("RLS is enabled on every tenant table", async () => {
     const { rows } = await ownerPool.query("select relname from pg_class where relrowsecurity and relname = any($1)", [TENANT_TABLES.concat(["organizations", "roles"])]);

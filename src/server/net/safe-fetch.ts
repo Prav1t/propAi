@@ -109,18 +109,28 @@ export async function resolveSafe(u: URL, opts: SafeTargetOptions = {}, resolver
 }
 
 export type SafeResponse = { status: number; body: string; durationMs: number };
+export type SafeRequestOptions = SafeTargetOptions & {
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  resolver?: Resolver;
+  overflow?: "truncate" | "error"; // logs keep a prefix; anything parsed (JSON) must be complete or fail
+  signal?: AbortSignal;
+};
+type RawResponse = { status: number; headers: http.IncomingHttpHeaders; body: Buffer; durationMs: number };
 
-export async function safePost(raw: string, body: string, headers: Record<string, string>, opts: SafeTargetOptions & { timeoutMs?: number; maxResponseBytes?: number; resolver?: Resolver } = {}): Promise<SafeResponse> {
+// one request to a vetted, pinned address; redirects are returned, never followed
+export async function safeRequest(raw: string, init: { method: string; headers?: Record<string, string>; body?: string | Buffer }, opts: SafeRequestOptions = {}): Promise<RawResponse> {
   const u = checkUrlShape(raw, opts);
   const target = await resolveSafe(u, opts, opts.resolver);
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const maxBytes = opts.maxResponseBytes ?? 8_192;
   const t0 = Date.now();
   const mod = u.protocol === "https:" ? https : http;
-  return new Promise<SafeResponse>((resolve, reject) => {
+  const body = init.body === undefined ? undefined : Buffer.isBuffer(init.body) ? init.body : Buffer.from(init.body);
+  return new Promise<RawResponse>((resolve, reject) => {
     const req = mod.request({
-      protocol: u.protocol, hostname: u.hostname.replace(/^\[|\]$/g, ""), port: u.port || undefined, path: `${u.pathname}${u.search}`, method: "POST",
-      headers: { ...headers, "content-length": Buffer.byteLength(body).toString() },
+      protocol: u.protocol, hostname: u.hostname.replace(/^\[|\]$/g, ""), port: u.port || undefined, path: `${u.pathname}${u.search}`, method: init.method,
+      headers: { ...init.headers, ...(body ? { "content-length": String(body.length) } : {}) },
       // pin the connection to the address we checked
       lookup: (_h: string, o: unknown, cb: (err: Error | null, address: string | { address: string; family: number }[], family?: number) => void) => {
         if (o && typeof o === "object" && (o as { all?: boolean }).all) cb(null, [{ address: target.address, family: target.family }]);
@@ -128,15 +138,27 @@ export async function safePost(raw: string, body: string, headers: Record<string
       },
       servername: net.isIP(u.hostname) ? undefined : u.hostname,
       agent: false,
+      signal: opts.signal,
     }, (res) => {
       const chunks: Buffer[] = [];
       let size = 0;
+      let done = false;
       res.on("data", (c: Buffer) => {
+        if (size + c.length > maxBytes && opts.overflow === "error") {
+          done = true;
+          res.destroy();
+          reject(new UnsafeTargetError(`The response from ${u.host} is larger than ${maxBytes} bytes.`));
+          return;
+        }
         if (size < maxBytes) chunks.push(c.subarray(0, maxBytes - size));
         size += c.length;
         if (size >= maxBytes) res.destroy(); // enough to show in the delivery log
       });
-      const finish = () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8"), durationMs: Date.now() - t0 });
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks), durationMs: Date.now() - t0 });
+      };
       res.on("end", finish);
       res.on("close", finish);
       res.on("error", () => finish());
@@ -145,4 +167,27 @@ export async function safePost(raw: string, body: string, headers: Record<string
     req.on("error", (err) => reject(err));
     req.end(body);
   });
+}
+
+export async function safePost(raw: string, body: string, headers: Record<string, string>, opts: SafeRequestOptions = {}): Promise<SafeResponse> {
+  const r = await safeRequest(raw, { method: "POST", headers, body }, opts);
+  return { status: r.status, body: r.body.toString("utf8"), durationMs: r.durationMs };
+}
+
+// a fetch() for libraries that talk to customer-chosen servers (OpenID Connect discovery, keys and tokens):
+// the same address vetting and pinning, no redirects, a time limit and a size limit on what comes back
+export function safeFetch(opts: SafeRequestOptions = {}) {
+  return async (url: string | URL, init: { method?: string; headers?: Record<string, string> | Headers; body?: unknown; signal?: AbortSignal | null } = {}): Promise<Response> => {
+    const headers: Record<string, string> = {};
+    if (init.headers instanceof Headers) init.headers.forEach((v, k) => { headers[k] = v; });
+    else Object.assign(headers, init.headers ?? {});
+    let body: string | undefined;
+    if (init.body instanceof URLSearchParams) body = init.body.toString();
+    else if (typeof init.body === "string") body = init.body;
+    else if (init.body != null) throw new UnsafeTargetError("Unsupported request body.");
+    const r = await safeRequest(String(url), { method: init.method ?? "GET", headers, body }, { maxResponseBytes: 512_000, overflow: "error", ...opts, signal: init.signal ?? opts.signal });
+    const h = new Headers();
+    for (const [k, v] of Object.entries(r.headers)) if (v !== undefined) h.set(k, Array.isArray(v) ? v.join(", ") : v);
+    return new Response(r.status === 204 || r.status === 304 ? null : new Uint8Array(r.body), { status: r.status, headers: h });
+  };
 }

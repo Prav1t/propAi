@@ -43,7 +43,8 @@ export default async function globalSetup(config: FullConfig) {
   // dashboard). Used when a memory-limited machine runs the suite in batches with a fresh dev server each.
   const only = process.env.E2E_WARMUP_ONLY?.split(",").map((x) => x.trim()).filter(Boolean);
   const routes = pageRoutes(path.join(root, "src/app")).sort()
-    .filter((r) => !only?.length || ["login", "dashboard", ...only].some((f) => r.includes(`/${f}`))); // "/properties" ≠ "/o/pacific-properties"
+    .filter((r) => !only?.length || ["login", "dashboard", ...only].some((f) => r.includes(`/${f}`))) // "/properties" ≠ "/o/pacific-properties"
+    .filter((r) => !r.includes("/session/renew")); // signs the warm-up browser out
   const started = Date.now();
   const browser = await chromium.launch(process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : {});
   try {

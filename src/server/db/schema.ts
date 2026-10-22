@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
+  bigint,
   boolean,
   check,
   index,
@@ -41,6 +42,7 @@ export const users = pgTable(
     mfaEnabled: boolean("mfa_enabled").notNull().default(false),
     mfaSecretEnc: text("mfa_secret_enc"), // AES-256-GCM encrypted TOTP secret
     mfaPendingSecretEnc: text("mfa_pending_secret_enc"), // during enrollment
+    mfaLastUsedStep: bigint("mfa_last_used_step", { mode: "number" }), // last accepted TOTP time step: a code works once (Iteration 11)
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -61,9 +63,14 @@ export const sessions = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     ip: inet("ip"),
     userAgent: text("user_agent"),
+    // Iteration 11: how the person signed in ("pwd", "otp", "recovery", "sso", "sso_mfa"), when they last re-confirmed
+    // it for a sensitive change, and the organization SSO connection behind an SSO session
+    amr: text("amr").array().notNull().default(sql`'{}'::text[]`),
+    reauthAt: timestamp("reauth_at", { withTimezone: true }),
+    ssoConnectionId: uuid("sso_connection_id"),
     createdAt: createdAt(),
   },
-  (t) => [index("sessions_user_idx").on(t.userId)],
+  (t) => [index("sessions_user_idx").on(t.userId), index("sessions_sso_idx").on(t.ssoConnectionId)],
 );
 
 export const emailTokens = pgTable(
@@ -420,11 +427,17 @@ export const auditLogs = pgTable(
     approvalId: uuid("approval_id"),
     workflowRunId: uuid("workflow_run_id"), // set when an automation rule made the change (Iteration 9)
     apiKeyId: uuid("api_key_id"), // set when the change came through the REST API (Iteration 10)
+    // tamper evidence (Iteration 11): filled by a database trigger — position in the organization's chain, the previous
+    // entry's hash and this entry's hash over its content (see migration 0024)
+    seq: bigint("seq", { mode: "number" }),
+    prevHash: text("prev_hash"),
+    hash: text("hash"),
     createdAt: createdAt(),
   },
   (t) => [
     index("audit_logs_org_created_idx").on(t.orgId, t.createdAt),
     index("audit_logs_entity_idx").on(t.orgId, t.entityType, t.entityId),
+    index("audit_logs_chain_idx").on(t.orgId, t.seq),
   ],
 );
 
@@ -2172,5 +2185,179 @@ export const featureFlags = pgTable(
   (t) => [
     uniqueIndex("feature_flags_global_uq").on(t.key).where(sql`${t.orgId} is null`),
     uniqueIndex("feature_flags_org_uq").on(t.key, t.orgId).where(sql`${t.orgId} is not null`),
+  ],
+);
+
+/* ───────────────────────── Security and privacy (Iteration 11) ───────────────────────── */
+
+// one row per audit chain ("platform" for entries without an organization); written only by the audit trigger
+export const auditChainHeads = pgTable("audit_chain_heads", {
+  chainKey: text("chain_key").primaryKey(),
+  seq: bigint("seq", { mode: "number" }).notNull(),
+  hash: text("hash").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// periodic snapshots of each chain head, also written to the logs, so a rewritten history can be detected later
+export const auditCheckpoints = pgTable(
+  "audit_checkpoints",
+  {
+    id: id(),
+    chainKey: text("chain_key").notNull(),
+    seq: bigint("seq", { mode: "number" }).notNull(),
+    hash: text("hash").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("audit_checkpoints_chain_idx").on(t.chainKey, t.createdAt)],
+);
+
+// organization security policy: who must use MFA, and whether staff must sign in with the organization's SSO
+export const orgSecurityPolicies = pgTable(
+  "org_security_policies",
+  {
+    orgId: uuid("org_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+    requireMfa: text("require_mfa").notNull().default("off"), // off | staff | everyone
+    requireSso: boolean("require_sso").notNull().default(false), // staff roles only; residents and vendors keep passwords
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [check("org_security_require_mfa_ck", sql`${t.requireMfa} in ('off','staff','everyone')`)],
+);
+
+// an organization's OpenID Connect identity provider (Google Workspace, Microsoft Entra ID, Okta or any OIDC provider)
+export const ssoConnections = pgTable(
+  "sso_connections",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(), // google | microsoft | okta | oidc
+    issuer: text("issuer").notNull(),
+    clientId: text("client_id").notNull(),
+    clientSecretEnc: text("client_secret_enc").notNull(),
+    status: text("status").notNull().default("active"), // active | disabled
+    // just-in-time membership for people from a verified domain who aren't members yet (null = only existing members)
+    jitRoleId: uuid("jit_role_id").references(() => roles.id, { onDelete: "set null" }),
+    jitPropertyId: uuid("jit_property_id").references(() => properties.id, { onDelete: "set null" }),
+    lastLoginAt: ts("last_login_at"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("sso_connections_org_uq").on(t.orgId),
+    check("sso_connections_provider_ck", sql`${t.provider} in ('google','microsoft','okta','oidc')`),
+    check("sso_connections_status_ck", sql`${t.status} in ('active','disabled')`),
+  ],
+);
+
+// email domains an organization has proven it controls (DNS TXT record); only these sign in through its SSO
+export const ssoDomains = pgTable(
+  "sso_domains",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    domain: text("domain").notNull(),
+    verificationToken: text("verification_token").notNull(),
+    verifiedAt: ts("verified_at"),
+    lastCheckedAt: ts("last_checked_at"),
+    lastCheckError: text("last_check_error"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("sso_domains_org_domain_uq").on(t.orgId, t.domain),
+    uniqueIndex("sso_domains_verified_uq").on(t.domain).where(sql`${t.verifiedAt} is not null`), // one organization per domain
+    check("sso_domains_lower_ck", sql`${t.domain} = lower(${t.domain})`),
+  ],
+);
+
+// an SSO sign-in in progress (state, nonce, PKCE verifier); single use, minutes-long, global like mfa_challenges
+export const ssoLoginStates = pgTable("sso_login_states", {
+  id: text("id").primaryKey(), // sha256(state)
+  connectionId: uuid("connection_id").notNull().references(() => ssoConnections.id, { onDelete: "cascade" }),
+  nonce: text("nonce").notNull(),
+  codeVerifier: text("code_verifier").notNull(),
+  purpose: text("purpose").notNull().default("login"), // login | reauth
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }), // reauth: who must come back
+  next: text("next"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: createdAt(),
+});
+
+// personal data requests: export (access/portability) and erasure, with what was done
+export const privacyRequests = pgTable(
+  "privacy_requests",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // export | erasure
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "set null" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    subjectLabel: text("subject_label").notNull(), // name at the time of the request (the record itself may be erased)
+    status: text("status").notNull().default("completed"), // completed | blocked | failed
+    reason: text("reason"),
+    result: jsonb("result").notNull().default({}),
+    exportFileId: uuid("export_file_id"),
+    requestedByUserId: uuid("requested_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("privacy_requests_org_idx").on(t.orgId, t.createdAt),
+    check("privacy_requests_kind_ck", sql`${t.kind} in ('export','erasure')`),
+    check("privacy_requests_status_ck", sql`${t.status} in ('completed','blocked','failed')`),
+  ],
+);
+
+// a legal hold stops erasure and retention deletes for one person until it's released
+export const legalHolds = pgTable(
+  "legal_holds",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    releasedAt: ts("released_at"),
+    releasedByUserId: uuid("released_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  },
+  (t) => [
+    index("legal_holds_org_idx").on(t.orgId),
+    check("legal_holds_subject_ck", sql`${t.residentId} is not null or ${t.userId} is not null`),
+  ],
+);
+
+// how long each kind of record is kept (null = keep); the retention job deletes or anonymizes what's older
+export const retentionPolicies = pgTable("retention_policies", {
+  orgId: uuid("org_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  messagesDays: integer("messages_days"),
+  visitorsDays: integer("visitors_days"),
+  parkingEvidenceDays: integer("parking_evidence_days"),
+  assistantDays: integer("assistant_days"),
+  auditDays: integer("audit_days"),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: updatedAt(),
+});
+
+// consent history for email and SMS (append-only: the latest row per person, channel and purpose is the current choice)
+export const consents = pgTable(
+  "consents",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    residentId: uuid("resident_id").references(() => residents.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull(), // email | sms
+    purpose: text("purpose").notNull().default("notifications"),
+    granted: boolean("granted").notNull(),
+    source: text("source").notNull(), // preferences | admin | signup
+    recordedByUserId: uuid("recorded_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    ip: inet("ip"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("consents_subject_idx").on(t.orgId, t.userId, t.channel, t.createdAt),
+    check("consents_channel_ck", sql`${t.channel} in ('email','sms')`),
+    check("consents_subject_ck", sql`${t.userId} is not null or ${t.residentId} is not null`),
   ],
 );

@@ -1,11 +1,13 @@
 import "server-only";
-import { and, eq, inArray, isNull, or, gte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, gte, lte, sql } from "drizzle-orm";
 import { setTxOrg, withContext } from "../../db/client";
 import {
   buildings, membershipScopes, memberships, organizations, properties, residents, roles, unitOccupancies, units,
 } from "../../db/schema";
 import type { Principal } from "../../authz/authorize";
 import type { RoleCategory, ScopeLevel } from "../../authz/system-roles";
+import { loadSecurityPolicy } from "../../sso/policy";
+import type { SecurityPolicy } from "@/lib/security-policy";
 
 export type OrgSummary = { id: string; name: string; slug: string; status: string; roleName: string; roleKey: string };
 
@@ -23,7 +25,7 @@ export async function listMyOrganizations(userId: string): Promise<OrgSummary[]>
 }
 
 // builds the Principal for (user, org slug); null = not a member / org unavailable
-export async function loadPrincipal(userId: string, orgSlug: string): Promise<(Principal & { orgName: string; orgTimezone: string }) | null> {
+export async function loadPrincipal(userId: string, orgSlug: string): Promise<(Principal & { orgName: string; orgTimezone: string; security: SecurityPolicy }) | null> {
   return withContext({ userId }, async (tx) => {
     const [m] = await tx
       .select({ membership: memberships, org: organizations, role: roles })
@@ -68,7 +70,13 @@ export async function loadPrincipal(userId: string, orgSlug: string): Promise<(P
         .from(residents)
         .innerJoin(unitOccupancies, eq(unitOccupancies.residentId, residents.id))
         .innerJoin(units, eq(units.id, unitOccupancies.unitId))
-        .where(and(eq(residents.userId, userId), or(isNull(unitOccupancies.endsOn), gte(unitOccupancies.endsOn, today))));
+        // current occupancies only: an incoming resident gets the unit from move-in day, not before (finding F-14),
+        // so they never see the outgoing household's packages, visitors or requests
+        .where(and(
+          eq(residents.userId, userId),
+          or(isNull(unitOccupancies.endsOn), gte(unitOccupancies.endsOn, today)),
+          or(isNull(unitOccupancies.startsOn), lte(unitOccupancies.startsOn, today)),
+        ));
       for (const r of rows) {
         residentId = r.residentId;
         unitIds.add(r.unitId);
@@ -77,7 +85,9 @@ export async function loadPrincipal(userId: string, orgSlug: string): Promise<(P
       }
     }
 
+    const security = await loadSecurityPolicy(tx, m.org.id);
     return {
+      security,
       userId,
       orgId: m.org.id,
       orgSlug: m.org.slug,

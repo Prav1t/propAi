@@ -22,6 +22,19 @@ export function verifyTotp(code: string, secret: string): boolean {
   }
 }
 
+// the 30-second time step a valid code belongs to (null when invalid); a step is accepted once per user, so a
+// code that was seen (shoulder-surfed, phished, logged) can't be replayed within its validity window
+export function totpStep(code: string, secret: string, now = Date.now()): number | null {
+  const clean = code.replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(clean)) return null;
+  try {
+    const delta = authenticator.checkDelta(clean, secret);
+    return delta === null ? null : Math.floor(now / 30_000) + delta;
+  } catch {
+    return null;
+  }
+}
+
 export function currentTotp(secret: string): string {
   return authenticator.generate(secret);
 }

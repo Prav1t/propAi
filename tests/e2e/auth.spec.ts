@@ -67,6 +67,7 @@ test("new user: register → verify → sign in → create org → invite teamma
 });
 
 test("two-factor: enroll, then sign in with a TOTP code", async ({ page }) => {
+  test.setTimeout(120_000);
   const email = unique("mfa");
   await page.goto("/register");
   await page.getByLabel("Full name").fill("Morgan MFA");
@@ -89,7 +90,15 @@ test("two-factor: enroll, then sign in with a TOTP code", async ({ page }) => {
   await page.getByLabel("Password", { exact: true }).fill("a sturdy passphrase 42");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/login\/mfa/);
+  // a code works once: if we're still in the step whose code turned MFA on, it's refused as a replay
+  const enrolledStep = Math.floor(Date.now() / 30_000);
   await page.getByLabel("Authentication code").fill(authenticator.generate(secret));
   await page.getByRole("button", { name: "Verify" }).click();
+  if (Math.floor(Date.now() / 30_000) === enrolledStep && !/\/orgs/.test(page.url())) {
+    await expect(page.getByText("That code didn't work.")).toBeVisible();
+    await page.waitForTimeout(30_000 - (Date.now() % 30_000) + 500); // the next code
+    await page.getByLabel("Authentication code").fill(authenticator.generate(secret));
+    await page.getByRole("button", { name: "Verify" }).click();
+  }
   await expect(page).toHaveURL(/\/orgs/);
 });

@@ -1,9 +1,14 @@
 import "server-only";
-import { and, asc, desc, eq, gte, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { memberships, residents, unitOccupancies } from "../../db/schema";
 import type { Tx } from "../../db/client";
 
-const current = or(isNull(unitOccupancies.endsOn), gte(unitOccupancies.endsOn, sql`current_date`));
+// moved in (or no move-in date) and not yet moved out: incoming residents aren't notified about the current
+// household's packages and visitors before their move-in day (finding F-14)
+const current = and(
+  or(isNull(unitOccupancies.endsOn), gte(unitOccupancies.endsOn, sql`current_date`)),
+  or(isNull(unitOccupancies.startsOn), lte(unitOccupancies.startsOn, sql`current_date`)),
+);
 
 // people currently living in a unit, primary occupant first
 export async function unitOccupants(tx: Tx, orgId: string, unitId: string) {

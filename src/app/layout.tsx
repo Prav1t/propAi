@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { connection } from "next/server";
 import { BRAND } from "@/config/brand";
 import "./globals.css";
 
@@ -14,7 +15,9 @@ export const viewport: Viewport = {
   themeColor: [{ media: "(prefers-color-scheme: light)", color: "#fafafa" }, { media: "(prefers-color-scheme: dark)", color: "#0f0f11" }],
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+// every page renders per request so its scripts carry that request's CSP nonce (see src/proxy.ts)
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  await connection();
   return (
     <html lang="en">
       <body className="min-h-dvh">{children}</body>

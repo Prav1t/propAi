@@ -3,6 +3,8 @@ import { listSessions, loginHistory, remainingRecoveryCodes } from "@/server/aut
 import { revokeOtherSessionsAction, revokeSessionAction } from "../actions";
 import { Badge, Panel, PanelHeader, Table, Td, Th } from "@/components/ui/primitives";
 import { Button } from "@/components/ui/button";
+import { FormAlert } from "@/components/ui/form";
+import { listMyOrganizations } from "@/server/modules/organizations/principal";
 import { MfaDisable, MfaSetup, PasswordForm } from "./security-forms";
 
 export const metadata = { title: "Security" };
@@ -16,12 +18,18 @@ function device(ua: string | null): string {
 }
 const when = (d: Date) => d.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
 
-export default async function SecurityPage() {
+export default async function SecurityPage({ searchParams }: PageProps<"/account/security">) {
   const s = await requireSession();
+  const requiredSlug = (await searchParams).required;
+  // the organization's name comes from the person's own memberships, never from the URL
+  const requiredBy = typeof requiredSlug === "string" ? (await listMyOrganizations(s.user.id)).find((o) => o.slug === requiredSlug)?.name : undefined;
   const [sessions, history, remaining] = await Promise.all([listSessions(s.user.id), loginHistory(s.user.id, 15), remainingRecoveryCodes(s.user.id)]);
   return (
     <div className="space-y-6">
-      <Panel><PanelHeader title="Password" /><PasswordForm /></Panel>
+      {requiredBy && !s.user.mfaEnabled ? (
+        <FormAlert kind="info">{`${requiredBy} requires two-step verification. Turn it on below, then open the organization again.`}</FormAlert>
+      ) : null}
+      {s.user.hasPassword ? <Panel><PanelHeader title="Password" /><PasswordForm /></Panel> : null}
       <Panel>
         <PanelHeader title="Two-factor authentication" description={s.user.mfaEnabled ? undefined : "Recommended for everyone, required soon for admins."} actions={s.user.mfaEnabled ? <Badge tone="success">On</Badge> : <Badge tone="warning">Off</Badge>} />
         {s.user.mfaEnabled ? <MfaDisable remaining={remaining} /> : <MfaSetup />}

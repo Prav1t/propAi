@@ -13,13 +13,13 @@ const base = (slug: string) => `/o/${slug}/settings/billing`;
 
 export async function changePlanAction(slug: string, _: ActionState, fd: FormData) {
   return runOrgForm({
-    orgSlug: slug, fd, schema: planSchema, allowReadOnly: true, run: (ctx, d) => changePlan(ctx, d),
+    orgSlug: slug, fd, schema: planSchema, allowReadOnly: true, recentAuth: true, run: (ctx, d) => changePlan(ctx, d),
     done: (r) => ({ redirectTo: r.redirectTo, message: r.message, revalidate: [`/o/${slug}`] }),
   });
 }
 
 export async function cancelSubscriptionAction(slug: string, _: ActionState, fd: FormData) {
-  return runOrgForm({ orgSlug: slug, fd, schema: z.object({}), allowReadOnly: true, run: (ctx) => setCancelAtPeriodEnd(ctx, true), done: (r) => ({ message: r.message, revalidate: [`/o/${slug}`] }) });
+  return runOrgForm({ orgSlug: slug, fd, schema: z.object({}), allowReadOnly: true, recentAuth: true, run: (ctx) => setCancelAtPeriodEnd(ctx, true), done: (r) => ({ message: r.message, revalidate: [`/o/${slug}`] }) });
 }
 
 export async function resumeSubscriptionAction(slug: string, _: ActionState, fd: FormData) {

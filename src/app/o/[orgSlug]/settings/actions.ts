@@ -1,4 +1,5 @@
 "use server";
+import { requireRecentAuth } from "@/server/reauth";
 import { revalidatePath } from "next/cache";
 import { getOrgContext } from "@/server/org-context";
 import { assertWritable } from "@/server/billing/entitlements";
@@ -51,6 +52,7 @@ export async function changeRoleAction(_: ActionState, fd: FormData): Promise<Ac
   const slug = str(fd, "orgSlug");
   const parsed = changeRoleSchema.safeParse({ membershipId: str(fd, "membershipId"), roleId: str(fd, "roleId"), propertyId: str(fd, "propertyId") });
   if (!parsed.success) return { error: "Choose a role." };
+  await requireRecentAuth(`/o/${slug}/settings/members`); // role changes are permission changes (F-09)
   try {
     const { ctx } = await getOrgContext(slug);
     await changeMemberRole(ctx, parsed.data);
@@ -64,6 +66,7 @@ export async function changeRoleAction(_: ActionState, fd: FormData): Promise<Ac
 export async function setMemberStatusAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const slug = str(fd, "orgSlug");
   const status = str(fd, "status") === "active" ? "active" : "deactivated";
+  await requireRecentAuth(`/o/${slug}/settings/members`);
   try {
     const { ctx } = await getOrgContext(slug);
     await setMemberStatus(ctx, str(fd, "membershipId"), status);

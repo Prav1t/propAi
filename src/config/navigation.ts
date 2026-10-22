@@ -70,6 +70,8 @@ export const NAV: NavSection[] = [
       { label: "Billing", href: (s) => `/o/${s}/settings/billing`, anyOf: ["billing.manage"], icon: "card" },
       { label: "Integrations", href: (s) => `/o/${s}/settings/integrations`, anyOf: ["integration.manage"], icon: "plug" },
       { label: "Developers", href: (s) => `/o/${s}/settings/developers`, anyOf: ["api.manage"], icon: "code" },
+      { label: "Security", href: (s) => `/o/${s}/settings/security`, anyOf: ["security.manage"], icon: "shield" },
+      { label: "Privacy", href: (s) => `/o/${s}/settings/privacy`, anyOf: ["privacy.manage"], icon: "lock" },
       { label: "Roles", href: (s) => `/o/${s}/settings/roles`, anyOf: ["role.read"], icon: "shield" },
       { label: "Audit log", href: (s) => `/o/${s}/settings/audit`, anyOf: ["audit.read"], icon: "list" },
     ],

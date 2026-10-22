@@ -145,12 +145,35 @@ Implemented in Iteration 1 unless marked planned:
 - Session cookie `HttpOnly`, `Secure` (prod), `SameSite=Lax`, `__Host-` prefix in production; tokens hashed at rest.
 - CSRF: Server Actions are POST-only with Next's built-in Origin/Host check; JSON API route handlers require same-origin `Origin` for cookie-authenticated mutations; API keys (Iteration 10) are header-based and CSRF-immune.
 - Rate limiting on login, registration, password reset, MFA (per IP and per identifier).
-- Security headers: HSTS (prod), `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, baseline CSP.
+- Security headers: HSTS (prod), `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, and (Iteration 11) a strict per-request **nonce CSP** set in `src/proxy.ts`. Every page renders per request so its scripts carry the nonce.
 - All input validated with Zod at the boundary; all SQL parameterised via Drizzle.
 - Generic auth errors (no account enumeration on login / reset).
 - Audit log for auth, membership and settings changes.
 - File uploads: magic-byte type detection, size limits, scanning hook, permission-checked and audited downloads (§9).
-- Planned: SSRF-safe fetcher for webhooks (Iteration 10), a real malware scanner adapter (ClamAV) and secret rotation guide (Iteration 13).
+- SSRF-safe fetcher for webhooks, integrations and OpenID Connect (Iteration 10/11).
+- Planned: a real malware scanner adapter (ClamAV) (Iteration 13).
+
+**Iteration 11 hardening** (threat model and finding log: [`docs/security/threat-model.md`](security/threat-model.md)):
+
+- **Client address:** from trusted proxies only (`TRUSTED_PROXY_HOPS` / `CLIENT_IP_HEADER`, `src/server/client-ip.ts`).
+- **Rate limits:** shared across instances through Redis (sliding window), with a per-instance fallback.
+- **Sessions:**
+  - record how they were established (`amr`: pwd, otp, recovery, sso, sso_mfa);
+  - slide, with an absolute limit;
+  - other sessions end on password and MFA changes.
+- **TOTP:** each code is accepted once.
+- **Re-confirmation:** sensitive actions call `requireRecentAuth()` (`src/server/reauth.ts`): a sign-in or confirmation from the last 10 minutes, otherwise *Confirm it's you* and back.
+- **Cross-site writes:** the proxy refuses cookie-authenticated writes whose Fetch Metadata or Origin says another site (API and provider webhooks are exempt).
+- **Single sign-on:** OpenID Connect per organization (`src/server/sso/*`):
+  - authorization code + PKCE, state and nonce;
+  - ID token signatures checked against the provider's keys;
+  - DNS-verified domains, optional just-in-time membership;
+  - discovery and token calls through the SSRF-safe fetch.
+- **Organization policy:** MFA for staff/everyone, and SSO for staff, decided per request in `orgPrincipalForSession()` (`src/lib/security-policy.ts`). Applied in `getOrgContext()` and in every cookie-authenticated route handler.
+- **Secrets at rest:** a keyring (`src/server/keyring.ts`, `v2.<keyId>.…` with the id bound as AAD); `npm run keys:rotate` re-seals.
+- **Audit log:** a per-organization SHA-256 hash chain maintained by a trigger, `audit_verify()`, an immutability trigger, and daily checkpoints written to a table and to the logs (`src/server/audit-integrity.ts`).
+- **Privacy:** per-person export and erasure, legal holds, retention and consent history (`src/server/privacy/service.ts`); the worker applies retention daily.
+- **Membership changes:** member management is limited to the manager's own scope, and resident deletion only touches resident access.
 
 ## 8. Events, notifications and the worker (Iteration 3)
 

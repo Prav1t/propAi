@@ -15,24 +15,60 @@ Each iteration must end runnable, building, tested, documented, with demo data. 
 | 8 | RAG + knowledge base | ✅ Done | pgvector passages from documents (PDF, Word, text) and versioned knowledge entries, indexing queue, embedding providers (+ offline demo embedder), permission-aware hybrid retrieval, cited answers, knowledge base admin with index status and "try a question", policy grounding for actions |
 | 9 | Analytics + automation | ✅ Done | Metric catalog (24 metrics, SQL, scoped), analytics page with accessible charts, 10 reports + CSV + print, explainable property health score, workflow engine (11 event triggers + schedules, conditions, 10 actions, role-based approvals, loop protection, idempotent runs), rule builder with dry run and run log, "due soon" SLA warnings, daily brief, insights, assistant analytics tools |
 | 10 | Billing + integrations | ✅ Done | Plans as configuration with entitlements and limits, 14-day trials, read-only mode on lapse, usage metering, billing provider abstraction (labelled development provider + Stripe adapter, idempotent events), scoped API keys, REST API v1 with OpenAPI + reference page, signed webhooks with retries/auto-disable/replay (SSRF-safe), Slack/Teams/Twilio/Resend/SendGrid, feature flags, platform console |
-| 11 | Security hardening | ⏭ Next | Threat model review, pen-test style tests, SSO/OAuth, org-enforced MFA, privacy export/deletion, rate limits on Redis |
-| 12 | UX polish | | Loading/empty/error states, accessibility audit, mobile passes, PWA, voice input |
+| 11 | Security hardening | ✅ Done | Threat model + finding log (13 findings fixed, each with a test), IDOR/escalation/tenant/injection suites, OIDC SSO (verified domains, JIT, PKCE, signature checks), org-enforced MFA/SSO, recent-auth for sensitive changes, one-time TOTP, absolute sessions, trusted-proxy IPs, Redis rate limits, nonce CSP + cross-site write guard, tamper-evident audit chain, key rotation, privacy export/erasure/legal holds/retention/consent, dependency + secret scanning, SBOM |
+| 12 | UX polish | ⏭ Next | Loading/empty/error states, accessibility audit, mobile passes, PWA, voice input |
 | 13 | Production readiness | | Prod Docker, migrations runbook, backups, monitoring, deployment guide |
 
-Iteration reports: [1](iterations/iteration-01.md) · [2](iterations/iteration-02.md) · [3](iterations/iteration-03.md) · [4](iterations/iteration-04.md) · [5](iterations/iteration-05.md) · [6](iterations/iteration-06.md) · [7](iterations/iteration-07.md) · [8](iterations/iteration-08.md) · [9](iterations/iteration-09.md) · [10](iterations/iteration-10.md)
+Iteration reports: [1](iterations/iteration-01.md) · [2](iterations/iteration-02.md) · [3](iterations/iteration-03.md) · [4](iterations/iteration-04.md) · [5](iterations/iteration-05.md) · [6](iterations/iteration-06.md) · [7](iterations/iteration-07.md) · [8](iterations/iteration-08.md) · [9](iterations/iteration-09.md) · [10](iterations/iteration-10.md) · [11](iterations/iteration-11.md) · Security: [threat model](security/threat-model.md)
 
-## Iteration 11 — detailed plan (security hardening)
+## Iteration 12 — detailed plan (UX and product polish)
 
-Goal: every critical/high finding fixed and proven by a test; the controls an enterprise security review asks for exist.
+Goal: the product feels commercially credible on desktop and phones, every screen handles loading, empty and error states, and an accessibility audit finds no serious issues.
 
-1. **Threat model and review** (`docs/security/threat-model.md`): assets, trust boundaries (browser, API keys, provider webhooks, worker, AI tools, outbound fetches), STRIDE per boundary, with a finding log. Review every route handler, server action and service for authorization on the record (not just the page), and every `system`/`platformAdmin` context use.
-2. **Pen-test style suite** (`tests/security/*`): IDOR sweeps (every `[id]` route and API path with another org's and another property's ids), privilege escalation (role change to a higher role, inviting with a role above your own, editing your own membership), mass assignment on forms and API bodies, CSRF on server actions (Origin checks), open redirects (`next=`), XSS through markdown/notes/filenames/webhook descriptions, SQL injection probes on search and filters, file upload abuse (polyglots, oversized, path names), webhook SSRF bypasses (DNS rebinding, IPv6 forms, redirects), API key brute force and timing, rate-limit evasion.
-3. **Rate limits on Redis** (`REDIS_URL`): the `RateLimiter` interface gets a Redis adapter (sliding window); sign-in, MFA, invitations, the assistant and per-key API limits become correct across instances. Lift the single-instance note.
-4. **SSO / OAuth**: OpenID Connect sign-in (Google, Microsoft Entra ID, Okta) with domain verification and just-in-time membership; an organization setting to require SSO and/or MFA for staff roles; session invalidation when enforcement changes.
-5. **Sessions and secrets**: list and revoke sessions per user and org-wide on deactivation (already partly done), re-auth for sensitive changes (MFA reset, API keys, billing), `APP_ENCRYPTION_KEY` rotation with key ids on ciphertexts (MFA secrets, webhook secrets, integration credentials).
-6. **Privacy (PIPEDA/GDPR principles)**: per-person data export (JSON + files) and deletion/anonymisation workflows with legal holds, retention settings for messages, visitor logs, parking evidence and audit logs, consent records for SMS/email; documented, not claimed as certification.
-7. **Headers and transport**: strict CSP (nonce-based scripts), HSTS, frame-ancestors, referrer policy, permissions policy; tests assert them.
-8. **Audit completeness**: document-access logging, permission changes, API key use summaries; a tamper-evidence hash chain on `audit_logs`.
-9. **Dependency and secret scanning** in CI (npm audit gate, gitleaks), SBOM.
+1. **Accessibility audit:**
+   - automated axe checks on every page in E2E (zero serious/critical violations);
+   - keyboard-only passes through the main flows (resident request, booking, front desk intake, approvals, the assistant);
+   - focus management in dialogs and drawers;
+   - colour contrast in both themes;
+   - screen-reader labels on charts, status badges and icon buttons.
+2. **States:** skeletons for slow pages (dashboard, analytics, assistant history), consistent empty states with the next action, recoverable error pages (`error.tsx` per area) with request ids, optimistic updates where safe (marking notifications read, ticking checklists).
+3. **Mobile passes:**
+   - resident app, front desk, staff task list and inspections on 360–414 px widths;
+   - bottom navigation for residents and staff;
+   - touch targets of at least 44 px;
+   - photo capture from the camera;
+   - tables that reflow into cards.
+4. **PWA:**
+   - a service worker with an offline shell;
+   - offline drafts for maintenance requests and inspection evidence, sent when back online;
+   - installability;
+   - web push for the notification engine (VAPID keys, per-device subscriptions, preferences), using the consent records from Iteration 11.
+5. **Assistant experience:**
+   - **voice input:** the browser's speech recognition where available, otherwise a provider speech-to-text adapter behind the model abstraction;
+   - suggested follow-ups;
+   - a clearer plan card diff when a plan is edited;
+   - keyboard shortcuts.
+6. **Navigation and tables:**
+   - saved filters and column choices per user;
+   - bulk actions on work orders and packages;
+   - the command palette learns recent records;
+   - breadcrumbs on deep pages.
+7. **Automation:** a visual flow view of WHEN → IF → THEN rules, next to the existing sentence builder.
+8. **Administration:**
+   - a custom role editor (permission picker with scope level; the F-03 scope rules already constrain who can grant what);
+   - organization-wide session list and sign-out for admins;
+   - the security and privacy pages polished from usability testing.
+9. **Dashboards:** role-specific dashboard refinements (property manager, facility, front desk, resident) with the health score and insights where they help.
 
-Carried over: SMS notification delivery (needs per-person phone numbers and consent — with privacy work above), Google/Outlook calendar sync implementation (`CalendarSync` contract exists), payment collection for amenity fees and deposits, OCR for scanned PDFs, voice input (Iteration 12), web push (Iteration 12), camera / licence-plate integration beyond `ingestDetection`, a visual flow view of automation rules (Iteration 12), Docker compose run on a machine with Docker, the `resident.created` webhook (needs a resident event in the outbox).
+Carried over (outside Iteration 12):
+
+- **SMS notification delivery:** consent records exist now; it still needs per-person phone numbers and quiet hours.
+- **Google/Outlook calendar sync:** the `CalendarSync` contract exists; the implementation doesn't.
+- **Payment collection** for amenity fees and deposits.
+- **OCR** for scanned PDFs.
+- **Camera / licence-plate integration** beyond `ingestDetection`.
+- **The `resident.created` webhook.**
+- **Running Docker Compose on a machine with Docker.**
+- **GitHub Actions pinned to commit SHAs.**
+- **An external penetration test.**
+- **Live verification of SSO** against real Google, Entra and Okta tenants, and of DNS domain verification.

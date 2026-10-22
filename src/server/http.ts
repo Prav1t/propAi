@@ -1,4 +1,5 @@
 import "server-only";
+import { clientIpConfig, forwardedHost } from "./client-ip";
 
 // CSRF guard for JSON route handlers: browsers always send Origin on cross-site POSTs, so it must match this host
 export function isSameOrigin(req: Request): boolean {
@@ -13,10 +14,8 @@ export function isSameOrigin(req: Request): boolean {
   const hosts = new Set<string>();
   const host = req.headers.get("host");
   if (host) hosts.add(host);
-  if (process.env.TRUST_PROXY === "true") {
-    const fwd = req.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-    if (fwd) hosts.add(fwd);
-  }
+  const fwd = forwardedHost(req.headers, clientIpConfig());
+  if (fwd) hosts.add(fwd);
   if (process.env.APP_URL) {
     try {
       hosts.add(new URL(process.env.APP_URL).host);

@@ -9,10 +9,11 @@ import { sendEmail } from "../mail/mailer";
 import { newSignInTemplate, resetPasswordTemplate, verifyEmailTemplate } from "../mail/templates";
 import { writeAudit } from "../audit";
 import type { RequestMeta } from "../request-meta";
-import { decrypt, encrypt, generateToken, hashToken } from "./crypto";
+import { generateToken, hashToken } from "./crypto";
+import { seal, unseal } from "../keyring";
 import { burnPasswordCheck, hashPassword, passwordSchema, verifyPassword } from "./password";
 import { LIMITS, rateLimiter } from "./rate-limit";
-import { hashRecoveryCode, newRecoveryCodes, newTotpSecret, totpUri, verifyTotp } from "./totp";
+import { hashRecoveryCode, newRecoveryCodes, newTotpSecret, totpStep, totpUri, verifyTotp } from "./totp";
 import { BRAND } from "@/config/brand";
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -32,20 +33,35 @@ const RATE_LIMITED = fail("rate_limited", "Too many attempts. Please wait a few 
 
 /* ───────────── sessions ───────────── */
 
-export async function createSession(userId: string, meta: RequestMeta | null): Promise<string> {
+// how a session was established (RFC 8176-style): "pwd" password, "otp" authenticator code, "recovery" recovery code,
+// "sso" an organization's identity provider ("sso_mfa" when it reported multi-factor), "invite" a new account
+export type AuthMethod = "pwd" | "otp" | "recovery" | "sso" | "sso_mfa" | "invite";
+export type SessionOptions = { amr: AuthMethod[]; ssoConnectionId?: string | null };
+
+export async function createSession(userId: string, meta: RequestMeta | null, opts: SessionOptions = { amr: ["pwd"] }): Promise<string> {
   const token = generateToken();
+  const now = new Date();
   await db().insert(sessions).values({
     id: hashToken(token),
     userId,
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+    expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
     ip: meta?.ip ?? null,
     userAgent: meta?.userAgent ?? null,
+    amr: [...new Set(opts.amr)],
+    reauthAt: now, // signing in counts as a fresh confirmation
+    ssoConnectionId: opts.ssoConnectionId ?? null,
   });
   return token;
 }
 
-export type SessionUser = Pick<User, "id" | "email" | "name" | "isPlatformAdmin" | "mfaEnabled" | "emailVerifiedAt">;
-export type ValidSession = { sessionId: string; expiresAt: Date; user: SessionUser; refreshed: boolean };
+export type SessionUser = Pick<User, "id" | "email" | "name" | "isPlatformAdmin" | "mfaEnabled" | "emailVerifiedAt"> & { hasPassword: boolean };
+export type ValidSession = {
+  sessionId: string; expiresAt: Date; user: SessionUser; refreshed: boolean;
+  createdAt: Date; amr: string[]; reauthAt: Date | null; ssoConnectionId: string | null;
+};
+
+// sessions slide while used, but a stolen cookie can't be kept alive forever (finding F-07)
+export const absoluteExpiry = (createdAt: Date) => new Date(createdAt.getTime() + env().SESSION_ABSOLUTE_DAYS * 24 * 60 * 60_000);
 
 // validates an opaque token; slides expiry; rejects deactivated users
 export async function validateSessionToken(token: string): Promise<ValidSession | null> {
@@ -60,21 +76,56 @@ export async function validateSessionToken(token: string): Promise<ValidSession 
   const row = rows[0];
   if (!row) return null;
   const now = Date.now();
-  if (row.s.expiresAt.getTime() <= now || row.u.status !== "active") {
+  const hardStop = absoluteExpiry(row.s.createdAt).getTime();
+  if (row.s.expiresAt.getTime() <= now || hardStop <= now || row.u.status !== "active") {
     await db().delete(sessions).where(eq(sessions.id, id));
     return null;
   }
   let expiresAt = row.s.expiresAt;
   let refreshed = false;
   if (expiresAt.getTime() - now < SESSION_TTL_MS - SESSION_REFRESH_MS) {
-    expiresAt = new Date(now + SESSION_TTL_MS);
+    expiresAt = new Date(Math.min(now + SESSION_TTL_MS, hardStop));
     refreshed = true;
     await db().update(sessions).set({ expiresAt, lastSeenAt: new Date() }).where(eq(sessions.id, id));
   } else if (now - row.s.lastSeenAt.getTime() > SEEN_UPDATE_MS) {
     await db().update(sessions).set({ lastSeenAt: new Date() }).where(eq(sessions.id, id));
   }
   const { id: uid, email, name, isPlatformAdmin, mfaEnabled, emailVerifiedAt } = row.u;
-  return { sessionId: id, expiresAt, refreshed, user: { id: uid, email, name, isPlatformAdmin, mfaEnabled, emailVerifiedAt } };
+  return {
+    sessionId: id, expiresAt, refreshed, createdAt: row.s.createdAt, amr: row.s.amr, reauthAt: row.s.reauthAt, ssoConnectionId: row.s.ssoConnectionId,
+    user: { id: uid, email, name, isPlatformAdmin, mfaEnabled, emailVerifiedAt, hasPassword: !!row.u.passwordHash },
+  };
+}
+
+/* ───────────── re-authentication for sensitive changes (finding F-09) ───────────── */
+
+export const REAUTH_WINDOW_MS = 10 * 60_000;
+
+// signed in, or re-confirmed, within the last few minutes
+export function isRecentAuth(s: Pick<ValidSession, "reauthAt">, windowMs = REAUTH_WINDOW_MS, now = Date.now()): boolean {
+  return !!s.reauthAt && now - s.reauthAt.getTime() <= windowMs;
+}
+
+// "confirm it's you": the password, or an authenticator/recovery code for people who sign in without one
+export async function reauthenticate(sessionId: string, userId: string, input: { password?: string; code?: string }, meta: RequestMeta | null): Promise<AuthResult> {
+  const rl = await rateLimiter().hit(`reauth:${userId}`, LIMITS.mfa.limit, LIMITS.mfa.windowMs);
+  if (!rl.allowed) return RATE_LIMITED;
+  const user = await db().query.users.findFirst({ where: eq(users.id, userId) });
+  if (!user || user.status !== "active") return fail("invalid", "Sign in again.");
+  let ok = false;
+  if (input.password && user.passwordHash) ok = await verifyPassword(user.passwordHash, input.password);
+  else if (input.code && user.mfaEnabled && user.mfaSecretEnc) ok = (await acceptMfaCode(user, input.code)) !== null;
+  if (!ok) {
+    await recordLogin({ userId, email: user.email, success: false, reason: "reauth_failed", meta });
+    return fail("invalid", user.passwordHash ? "That password isn't right." : "That code didn't work.");
+  }
+  await db().update(sessions).set({ reauthAt: new Date() }).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)));
+  return { ok: true };
+}
+
+// marks the session as freshly confirmed (used by an SSO round trip with prompt=login)
+export async function markReauthenticated(sessionId: string, userId: string) {
+  await db().update(sessions).set({ reauthAt: new Date() }).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)));
 }
 
 export async function revokeSession(sessionId: string) {
@@ -246,14 +297,14 @@ async function isNewDevice(userId: string, meta: RequestMeta | null): Promise<bo
   return !prior.some((p) => p.ip === (meta?.ip ?? null) && p.ua === (meta?.userAgent ?? null));
 }
 
-async function completeLogin(user: User, meta: RequestMeta | null): Promise<LoginOutcome> {
+async function completeLogin(user: User, meta: RequestMeta | null, amr: AuthMethod[] = ["pwd"]): Promise<LoginOutcome> {
   const suspicious = await isNewDevice(user.id, meta);
   await recordLogin({ userId: user.id, email: user.email, success: true, reason: "ok", meta, suspicious });
   await db().update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
   if (suspicious) {
     await sendEmail(user.email, newSignInTemplate(user.name, new Date().toUTCString(), meta?.ip ?? null, meta?.userAgent ?? null, `${env().APP_URL}/account/security`));
   }
-  const token = await createSession(user.id, meta);
+  const token = await createSession(user.id, meta, { amr });
   return { ok: true, kind: "session", token, userId: user.id };
 }
 
@@ -269,17 +320,9 @@ export async function verifyMfaLogin(challengeToken: string, code: string, meta:
   const user = await db().query.users.findFirst({ where: eq(users.id, challenge.userId) });
   if (!user || user.status !== "active" || !user.mfaEnabled || !user.mfaSecretEnc) return fail("challenge_expired", "Sign in again.");
 
-  let ok = verifyTotp(code, decrypt(user.mfaSecretEnc, env().APP_ENCRYPTION_KEY));
-  let usedRecovery = false;
-  if (!ok && /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/i.test(code.trim())) {
-    const used = await db()
-      .update(mfaRecoveryCodes)
-      .set({ usedAt: new Date() })
-      .where(and(eq(mfaRecoveryCodes.userId, user.id), eq(mfaRecoveryCodes.codeHash, hashRecoveryCode(code)), isNull(mfaRecoveryCodes.usedAt)))
-      .returning({ id: mfaRecoveryCodes.id });
-    ok = used.length > 0;
-    usedRecovery = ok;
-  }
+  const method = await acceptMfaCode(user, code);
+  const ok = method !== null;
+  const usedRecovery = method === "recovery";
   if (!ok) {
     await db().update(mfaChallenges).set({ attempts: sql`${mfaChallenges.attempts} + 1` }).where(eq(mfaChallenges.id, id));
     await recordLogin({ userId: user.id, email: user.email, success: false, reason: "mfa_failed", meta });
@@ -287,7 +330,28 @@ export async function verifyMfaLogin(challengeToken: string, code: string, meta:
   }
   await db().delete(mfaChallenges).where(eq(mfaChallenges.id, id));
   if (usedRecovery) log.info("auth.recovery_code_used", { userId: user.id });
-  return completeLogin(user, meta);
+  return completeLogin(user, meta, ["pwd", method]);
+}
+
+// accepts a current authenticator code once (the step is recorded atomically, finding F-06) or an unused recovery code
+async function acceptMfaCode(user: User, code: string): Promise<"otp" | "recovery" | null> {
+  if (!user.mfaSecretEnc) return null;
+  const step = totpStep(code, unseal(user.mfaSecretEnc));
+  if (step !== null) {
+    const claimed = await db().update(users).set({ mfaLastUsedStep: step })
+      .where(and(eq(users.id, user.id), sql`(${users.mfaLastUsedStep} is null or ${users.mfaLastUsedStep} < ${step})`))
+      .returning({ id: users.id });
+    return claimed.length ? "otp" : null; // already used: a replay
+  }
+  if (/^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/i.test(code.trim())) {
+    const used = await db()
+      .update(mfaRecoveryCodes)
+      .set({ usedAt: new Date() })
+      .where(and(eq(mfaRecoveryCodes.userId, user.id), eq(mfaRecoveryCodes.codeHash, hashRecoveryCode(code)), isNull(mfaRecoveryCodes.usedAt)))
+      .returning({ id: mfaRecoveryCodes.id });
+    if (used.length) return "recovery";
+  }
+  return null;
 }
 
 /* ───────────── password reset / change ───────────── */
@@ -338,18 +402,22 @@ export async function beginMfaEnrollment(userId: string): Promise<{ secret: stri
   const user = await db().query.users.findFirst({ where: eq(users.id, userId) });
   if (!user) throw new Error("User not found");
   const secret = newTotpSecret();
-  await db().update(users).set({ mfaPendingSecretEnc: encrypt(secret, env().APP_ENCRYPTION_KEY) }).where(eq(users.id, userId));
+  await db().update(users).set({ mfaPendingSecretEnc: seal(secret) }).where(eq(users.id, userId));
   return { secret, uri: totpUri(secret, user.email, BRAND.name) };
 }
 
-export async function confirmMfaEnrollment(userId: string, code: string, meta: RequestMeta | null): Promise<AuthResult<{ recoveryCodes: string[] }>> {
+// keepSessionId: the session that enrolled stays signed in (now counting as two-step); every other session ends (F-08)
+export async function confirmMfaEnrollment(userId: string, code: string, meta: RequestMeta | null, keepSessionId: string | null = null): Promise<AuthResult<{ recoveryCodes: string[] }>> {
   const user = await db().query.users.findFirst({ where: eq(users.id, userId) });
   if (!user?.mfaPendingSecretEnc) return fail("no_enrollment", "Start setup again.");
   const secretEnc = user.mfaPendingSecretEnc;
-  if (!verifyTotp(code, decrypt(secretEnc, env().APP_ENCRYPTION_KEY))) return fail("invalid_code", "That code didn't match. Try the current code from your app.");
+  const step = totpStep(code, unseal(secretEnc));
+  if (step === null) return fail("invalid_code", "That code didn't match. Try the current code from your app.");
   const codes = newRecoveryCodes();
   await db().transaction(async (tx) => {
-    await tx.update(users).set({ mfaEnabled: true, mfaSecretEnc: secretEnc, mfaPendingSecretEnc: null }).where(eq(users.id, userId));
+    await tx.update(users).set({ mfaEnabled: true, mfaSecretEnc: secretEnc, mfaPendingSecretEnc: null, mfaLastUsedStep: step }).where(eq(users.id, userId));
+    await tx.delete(sessions).where(keepSessionId ? and(eq(sessions.userId, userId), ne(sessions.id, keepSessionId)) : eq(sessions.userId, userId));
+    if (keepSessionId) await tx.update(sessions).set({ amr: sql`array(select distinct unnest(${sessions.amr} || array['otp']))`, reauthAt: new Date() }).where(eq(sessions.id, keepSessionId));
     await tx.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId));
     await tx.insert(mfaRecoveryCodes).values(codes.map((c) => ({ userId, codeHash: hashRecoveryCode(c) })));
   });
@@ -359,11 +427,12 @@ export async function confirmMfaEnrollment(userId: string, code: string, meta: R
   return { ok: true, recoveryCodes: codes };
 }
 
-export async function disableMfa(userId: string, password: string, meta: RequestMeta | null): Promise<AuthResult> {
+export async function disableMfa(userId: string, password: string, meta: RequestMeta | null, keepSessionId: string | null = null): Promise<AuthResult> {
   const user = await db().query.users.findFirst({ where: eq(users.id, userId) });
   if (!user?.passwordHash || !(await verifyPassword(user.passwordHash, password))) return fail("invalid_password", "Your password is incorrect.");
-  await db().update(users).set({ mfaEnabled: false, mfaSecretEnc: null, mfaPendingSecretEnc: null }).where(eq(users.id, userId));
+  await db().update(users).set({ mfaEnabled: false, mfaSecretEnc: null, mfaPendingSecretEnc: null, mfaLastUsedStep: null }).where(eq(users.id, userId));
   await db().delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId));
+  await revokeOtherSessions(userId, keepSessionId); // a weaker sign-in requirement shouldn't leave other sessions running (F-08)
   await withContext({ userId }, (tx) =>
     writeAudit(tx, { orgId: null, actorUserId: userId, action: "user.mfa_disabled", entityType: "user", entityId: userId }, meta),
   );

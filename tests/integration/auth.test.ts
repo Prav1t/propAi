@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   beginMfaEnrollment, changePassword, confirmMfaEnrollment, login, register, requestPasswordReset, resetPassword,
   validateSessionToken, verifyEmail, verifyMfaLogin, revokeSession, listSessions,
@@ -157,8 +157,20 @@ describe("two-factor authentication", () => {
     const step = await login({ email: e, password: PW }, meta());
     if (!step.ok || step.kind !== "mfa") throw new Error("expected mfa challenge");
     expect((await verifyMfaLogin(step.challengeToken, "123456", meta())).ok).toBe(false);
-    const done = await verifyMfaLogin(step.challengeToken, currentTotp(secret), meta());
-    expect(done).toMatchObject({ ok: true, kind: "session" });
+    // the code used for enrollment can't be used again (replay guard, Iteration 11)…
+    expect(await verifyMfaLogin(step.challengeToken, currentTotp(secret), meta())).toMatchObject({ ok: false, code: "invalid_code" });
+    // …the next 30-second code works, once
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 30_000 });
+    try {
+      const code = currentTotp(secret);
+      const done = await verifyMfaLogin(step.challengeToken, code, meta());
+      expect(done).toMatchObject({ ok: true, kind: "session" });
+      const again = await login({ email: e, password: PW }, meta());
+      if (!again.ok || again.kind !== "mfa") throw new Error("expected mfa challenge");
+      expect(await verifyMfaLogin(again.challengeToken, code, meta())).toMatchObject({ ok: false, code: "invalid_code" });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const step2 = await login({ email: e, password: PW }, meta());
     if (!step2.ok || step2.kind !== "mfa") throw new Error("expected mfa challenge");

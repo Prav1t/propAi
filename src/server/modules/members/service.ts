@@ -2,8 +2,8 @@ import "server-only";
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, setTxOrg, withContext, type Tx } from "../../db/client";
-import { invitations, membershipScopes, memberships, organizations, properties, residents, roles, users } from "../../db/schema";
-import { authorize, ForbiddenError, NotFoundError } from "../../authz/authorize";
+import { buildings, invitations, membershipScopes, memberships, organizations, properties, residents, roles, users } from "../../db/schema";
+import { authorize, ForbiddenError, NotFoundError, type Principal } from "../../authz/authorize";
 import { writeAudit } from "../../audit";
 import { generateToken, hashToken } from "../../auth/crypto";
 import { hashPassword, passwordSchema } from "../../auth/password";
@@ -89,13 +89,26 @@ async function resolveGrant(ctx: TenantCtx, tx: Tx, roleId: string, propertyId: 
   const role = (await assignableRoles(tx, ctx.principal.orgId)).find((r) => r.id === roleId);
   if (!role) throw new ValidationError("That role can't be assigned here.", "roleId");
   if (!role.permissions.every((p) => ctx.principal.permissions.has(p))) throw new ForbiddenError("You can't grant a role with more access than your own.");
+  // a manager who isn't organization-wide can't hand out organization-wide access (finding F-03)
+  if (ctx.principal.role.scopeLevel !== "org" && role.scopeLevel !== "scoped") throw new ForbiddenError("You can only grant roles limited to properties you manage.");
   if (role.scopeLevel === "scoped") {
     if (!propertyId) throw new ValidationError("Choose the property this person will manage.", "propertyId");
     const [prop] = await tx.select({ id: properties.id }).from(properties).where(and(eq(properties.id, propertyId), eq(properties.orgId, ctx.principal.orgId)));
     if (!prop) throw new ValidationError("Property not found.", "propertyId");
-    authorize(ctx.principal, "property.read", { orgId: ctx.principal.orgId, propertyId });
+    // full access to the property, not the read-only view a building-level scope gives of its parent
+    if (ctx.principal.role.scopeLevel !== "org" && !ctx.principal.propertyIds.has(propertyId)) throw new ForbiddenError("You can only grant access to properties you manage.");
   }
   return { role, propertyId: role.scopeLevel === "scoped" ? propertyId! : null };
+}
+
+// organization-wide managers manage anyone; others only members whose whole scope sits inside their own (F-03)
+async function assertManagesMember(tx: Tx, p: Principal, membershipId: string, scopeLevel: string) {
+  if (p.role.scopeLevel === "org") return;
+  if (scopeLevel !== "scoped") throw new ForbiddenError("You can only manage members limited to properties you manage.");
+  const scopes = await tx.select({ portfolioId: membershipScopes.portfolioId, propertyId: membershipScopes.propertyId, buildingPropertyId: buildings.propertyId })
+    .from(membershipScopes).leftJoin(buildings, eq(buildings.id, membershipScopes.buildingId)).where(eq(membershipScopes.membershipId, membershipId));
+  const inside = scopes.every((s) => (s.portfolioId ? p.portfolioIds.has(s.portfolioId) : p.propertyIds.has((s.propertyId ?? s.buildingPropertyId)!)));
+  if (!scopes.length || !inside) throw new ForbiddenError("You can only manage members limited to properties you manage.");
 }
 
 export async function inviteMember(ctx: TenantCtx, input: z.infer<typeof inviteSchema>) {
@@ -238,6 +251,7 @@ export async function changeMemberRole(ctx: TenantCtx, input: z.infer<typeof cha
     if (!m) throw new NotFoundError();
     const currentRole = (await tx.select().from(roles).where(eq(roles.id, m.m.roleId)))[0];
     if (!currentRole.permissions.every((p) => ctx.principal.permissions.has(p))) throw new ForbiddenError("You can't modify a member with more access than your own.");
+    await assertManagesMember(tx, ctx.principal, m.m.id, currentRole.scopeLevel);
     const { role, propertyId } = await resolveGrant(ctx, tx, input.roleId, input.propertyId);
     if (m.roleKey === "org_admin" && role.key !== "org_admin" && (await activeAdminCount(tx, ctx.principal.orgId)) <= 1) {
       throw new ValidationError("An organization needs at least one admin.");
@@ -256,6 +270,7 @@ export async function setMemberStatus(ctx: TenantCtx, membershipId: string, stat
     const [m] = await tx.select({ m: memberships, role: roles }).from(memberships).innerJoin(roles, eq(roles.id, memberships.roleId)).where(and(eq(memberships.id, membershipId), eq(memberships.orgId, ctx.principal.orgId)));
     if (!m) throw new NotFoundError();
     if (!m.role.permissions.every((p) => ctx.principal.permissions.has(p))) throw new ForbiddenError();
+    await assertManagesMember(tx, ctx.principal, m.m.id, m.role.scopeLevel);
     if (status === "deactivated" && m.role.key === "org_admin" && m.m.status === "active" && (await activeAdminCount(tx, ctx.principal.orgId)) <= 1) {
       throw new ValidationError("An organization needs at least one active admin.");
     }

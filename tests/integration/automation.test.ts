@@ -18,11 +18,13 @@ async function ctxFor(email: string, slug = "pacific-properties"): Promise<Tenan
   return { principal: p, meta };
 }
 const q = async (sql: string, params: unknown[] = []) => (await ownerPool.query(sql, params)).rows;
+// process events until none are left (other test files may have left a backlog; the engine works in batches)
 const settle = async () => {
   await drainOutbox();
-  for (let i = 0; i <= MAX_CHAIN_DEPTH; i++) if (!(await processAutomationEvents())) break;
+  for (let i = 0; i < 100; i++) if (!(await processAutomationEvents())) break;
   await drainOutbox();
 };
+void MAX_CHAIN_DEPTH;
 const tag = () => Math.random().toString(36).slice(2, 8);
 
 let admin: TenantCtx, pm: TenantCtx, emma: TenantCtx, concierge: TenantCtx, vendor: TenantCtx, ns: TenantCtx, facility: TenantCtx;
@@ -38,6 +40,7 @@ beforeAll(async () => {
   ids.coastline = (await q("select id from vendors where name like 'Coastline%'"))[0].id;
   // seeded rules would also react to the requests these tests create; switch them off for this file
   await q("update workflows set enabled = false where org_id = (select id from organizations where slug = 'pacific-properties')");
+  await settle(); // events other test files left behind, so this file's runs aren't queued behind them
 });
 afterAll(async () => {
   await ownerPool.end();

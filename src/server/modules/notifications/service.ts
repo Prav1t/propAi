@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { withContext, type Tx } from "../../db/client";
 import {
-  complaints, incidents, inspections, notificationPreferences, notifications, organizations, outboxEvents,
+  consents,  complaints, incidents, inspections, notificationPreferences, notifications, organizations, outboxEvents,
   tasks, timelineEvents, users, workOrders,
 } from "../../db/schema";
 import type { TenantCtx } from "../context";
@@ -12,6 +12,7 @@ import { notificationTemplate } from "../../mail/templates";
 import { env } from "../../env";
 import { log } from "../../log";
 import { addTimeline } from "../ops/core";
+import { recordConsent } from "../../privacy/service";
 import { membershipUser, usersWithOrgPerm, usersWithPermAt, vendorUsers } from "./recipients";
 import { communityDeliveries } from "./community";
 import { analyticsSettings } from "../../analytics/settings";
@@ -325,6 +326,13 @@ export async function savePreferences(ctx: TenantCtx, prefs: { kind: string; ema
     for (const p of valid) {
       await tx.insert(notificationPreferences).values({ orgId: ctx.principal.orgId, userId: ctx.principal.userId, kind: p.kind, email: p.email, inApp: p.inApp })
         .onConflictDoUpdate({ target: [notificationPreferences.orgId, notificationPreferences.userId, notificationPreferences.kind], set: { email: p.email, inApp: p.inApp } });
+    }
+    // consent history (Iteration 11): a row whenever the person's choice to get email at all changes
+    const wantsEmail = valid.some((p) => p.email);
+    const [last] = await tx.select({ granted: consents.granted }).from(consents)
+      .where(and(eq(consents.orgId, ctx.principal.orgId), eq(consents.userId, ctx.principal.userId), eq(consents.channel, "email"))).orderBy(desc(consents.createdAt)).limit(1);
+    if (valid.length && (!last || last.granted !== wantsEmail)) {
+      await recordConsent(tx, { orgId: ctx.principal.orgId, userId: ctx.principal.userId, channel: "email", granted: wantsEmail, source: "preferences", recordedByUserId: ctx.principal.userId, ip: ctx.meta?.ip ?? null });
     }
   });
 }

@@ -9,7 +9,8 @@ import { FlagControl } from "@/components/billing/admin-bits";
 import { FLAGS, FLAG_KEYS, envFlag } from "@/config/flags";
 import { LIMITS, PLANS, isPlanKey, type LimitKey } from "@/config/plans";
 import { formatMoney } from "@/lib/billing";
-import { setFlagAction, setOrgStatusAction } from "./actions";
+import { setFlagAction, setOrgStatusAction, verifyAllAuditAction } from "./actions";
+import { SchemaForm } from "@/components/ui/schema-form";
 
 export const metadata = { title: "Platform admin" };
 
@@ -63,6 +64,10 @@ export default async function AdminPage() {
             })}
           </tbody>
         </Table>
+      </Panel>
+      <Panel className="mt-6" data-testid="platform-audit">
+        <PanelHeader title="Audit log integrity" description="Recomputes every organization's audit hash chain (and the platform's own)." />
+        <div className="p-4"><SchemaForm action={verifyAllAuditAction} submitLabel="Verify all audit logs" pendingLabel="Verifying…" fields={[]} /></div>
       </Panel>
       <Panel className="mt-6">
         <PanelHeader title="Feature flags (all organizations)" description={`Overrides here apply everywhere unless an organization has its own (${flags.orgOverrides} organization override${flags.orgOverrides === 1 ? "" : "s"}). “Default” follows the environment (FLAG_<NAME>) or the built-in default.`} />

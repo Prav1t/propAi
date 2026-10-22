@@ -4,8 +4,7 @@ import { withContext } from "../db/client";
 import { integrations } from "../db/schema";
 import { authorize, NotFoundError } from "../authz/authorize";
 import { auditAs, tenantTx, ValidationError, type TenantCtx } from "../modules/context";
-import { decrypt, encrypt } from "../auth/crypto";
-import { env } from "../env";
+import { seal, unseal } from "../keyring";
 import { log } from "../log";
 import { assertFeature, loadEntitlements } from "../billing/entitlements";
 import { INTEGRATIONS, isE164, isIntegrationKey, validateIntegration, type ChatProvider, type IntegrationKey } from "@/lib/integrations";
@@ -29,7 +28,7 @@ export async function listIntegrations(ctx: TenantCtx): Promise<IntegrationView[
     let hints: Record<string, string> = {};
     if (r?.credentialsEnc) {
       try {
-        hints = Object.fromEntries(Object.entries(JSON.parse(decrypt(r.credentialsEnc, env().APP_ENCRYPTION_KEY)) as Record<string, string>).map(([k, v]) => [k, mask(v)]));
+        hints = Object.fromEntries(Object.entries(JSON.parse(unseal(r.credentialsEnc)) as Record<string, string>).map(([k, v]) => [k, mask(v)]));
       } catch { /* unreadable after a key rotation: shown as connected without hints */ }
     }
     return { key, connected: !!r, status: r?.status ?? null, config: (r?.config ?? {}) as Record<string, string>, secretHints: hints, lastUsedAt: r?.lastUsedAt ?? null, lastError: r?.lastError ?? null, connectedAt: r?.createdAt ?? null };
@@ -53,7 +52,7 @@ export async function connectIntegration(ctx: TenantCtx, key: string, values: Re
     else config[f.key] = v;
   }
   await tenantTx(ctx, async (tx) => {
-    const values = { config, credentialsEnc: encrypt(JSON.stringify(secrets), env().APP_ENCRYPTION_KEY), status: "connected", lastError: null, connectedByUserId: ctx.principal.userId };
+    const values = { config, credentialsEnc: seal(JSON.stringify(secrets)), status: "connected", lastError: null, connectedByUserId: ctx.principal.userId };
     await tx.insert(integrations).values({ orgId: ctx.principal.orgId, provider: key, ...values })
       .onConflictDoUpdate({ target: [integrations.orgId, integrations.provider], set: values });
     await auditAs(tx, ctx, "integration.connected", "integration", null, undefined, { provider: key, config }); // secrets never in the audit log
@@ -73,7 +72,7 @@ export async function disconnectIntegration(ctx: TenantCtx, key: string) {
 async function loadCreds(orgId: string, key: IntegrationKey) {
   const [r] = await withContext({ orgId, system: true }, (tx) => tx.select().from(integrations).where(and(eq(integrations.orgId, orgId), eq(integrations.provider, key))));
   if (!r?.credentialsEnc) return null;
-  return { row: r, creds: { ...(r.config as Record<string, string>), ...(JSON.parse(decrypt(r.credentialsEnc, env().APP_ENCRYPTION_KEY)) as Record<string, string>) } };
+  return { row: r, creds: { ...(r.config as Record<string, string>), ...(JSON.parse(unseal(r.credentialsEnc)) as Record<string, string>) } };
 }
 
 async function record(orgId: string, key: IntegrationKey, error: string | null) {

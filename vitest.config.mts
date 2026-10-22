@@ -18,7 +18,8 @@ export default defineConfig({
         resolve: { alias },
         test: {
           name: "integration",
-          include: ["tests/integration/**/*.test.ts"],
+          // security suites share the integration database setup (one reset per run)
+          include: ["tests/integration/**/*.test.ts", "tests/security/**/*.test.ts"],
           environment: "node",
           globalSetup: ["tests/support/global-setup.ts"],
           setupFiles: ["tests/support/env.ts"],

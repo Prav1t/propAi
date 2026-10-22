@@ -23,11 +23,14 @@ run() {
 run "analytics automation" "analytics,brief,assistant,automations,maintenance"
 run "assistant" "assistant,maintenance,settings/ai,packages,notifications"
 run "assistant-actions" "assistant,maintenance,announcements,tasks,settings/ai,amenities"
-run "auth authorization" "register,verify,onboarding,orgs,settings,invite,account,maintenance,residents,units,properties,analytics,packages,amenities,documents,staff,vendors,admin"
+# (auth and authorization were one batch; compiling all 60-odd routes it touches outgrew a ~6 GB limit)
+run "auth" "register,verify,onboarding,orgs,settings,invite,account"
+run "authorization" "maintenance,residents,units,properties,portfolios,analytics,packages,amenities,documents,staff,vendors,admin"
 run "billing" "settings/billing,settings/developers,settings/integrations,developers,admin,maintenance,api/v1"
 run "community" "amenities,packages,messages,announcements,documents,notifications"
 run "frontdesk" "desk,visitors,parking,shifts,pass,assets,calendar,notifications"
 run "knowledge" "knowledge,documents,assistant"
 run "maintenance" "maintenance,inspections,notifications,tasks"
 run "portfolio" "properties,buildings,units,residents,search,portfolios"
+run "security" "sso,account/confirm,settings/security,settings/privacy,settings/developers,settings/audit,maintenance,analytics,assistant,calendar,api/v1"
 exit $status

@@ -36,8 +36,10 @@ async function main() {
     await pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${ident}`);
     await pool.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${ident}`);
     await pool.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${ident}`);
-    // audit log is append-only for the app
+    // audit log is append-only for the app; chain heads are written only by the audit trigger, checkpoints never change
     await pool.query(`REVOKE UPDATE, DELETE ON audit_logs FROM ${ident}`);
+    await pool.query(`REVOKE INSERT, UPDATE, DELETE ON audit_chain_heads FROM ${ident}`);
+    await pool.query(`REVOKE UPDATE, DELETE ON audit_checkpoints FROM ${ident}`);
     // drizzle's migration bookkeeping stays owner-only
     await pool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA drizzle FROM ${ident}`).catch(() => {});
     const { rows } = await pool.query(`select rolsuper, rolbypassrls from pg_roles where rolname = $1`, [appRole]);

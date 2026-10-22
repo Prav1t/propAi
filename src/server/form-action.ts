@@ -8,6 +8,7 @@ import { toActionError, zodFieldErrors, type ActionState } from "./actions";
 import type { TenantCtx } from "./modules/context";
 import { afterChange } from "./after-change";
 import { assertWritable } from "./billing/entitlements";
+import { requireRecentAuth } from "./reauth";
 
 // every string field except secrets, echoed back so the form keeps input on error
 function echo(fd: FormData): Record<string, string> {
@@ -24,7 +25,9 @@ export async function runOrgForm<S extends z.ZodType, R>(opts: {
   run: (ctx: TenantCtx, data: z.output<S>) => Promise<R>;
   done: (result: R) => { redirectTo?: string; revalidate?: string[]; message?: string; data?: unknown };
   allowReadOnly?: boolean; // billing forms stay usable when the subscription has lapsed
+  recentAuth?: boolean; // sensitive changes: a sign-in or confirmation from the last few minutes (Iteration 11)
 }): Promise<ActionState> {
+  if (opts.recentAuth) await requireRecentAuth(`/o/${opts.orgSlug}/settings`);
   const values = echo(opts.fd);
   const parsed = opts.schema.safeParse(Object.fromEntries(Object.entries(values)));
   if (!parsed.success) return { fieldErrors: zodFieldErrors(parsed.error), values, error: "Check the highlighted fields." };

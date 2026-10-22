@@ -4,7 +4,9 @@ import { getOrgContext } from "@/server/org-context";
 import { can } from "@/server/authz/authorize";
 import { listAuditLogs } from "@/server/modules/organizations/service";
 import { describeAudit } from "@/lib/audit-labels";
-import { Badge, EmptyState, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Table, Td, Th } from "@/components/ui/primitives";
+import { SchemaForm } from "@/components/ui/schema-form";
+import { verifyAuditAction } from "./actions";
 
 export const metadata = { title: "Audit log" };
 
@@ -18,6 +20,10 @@ export default async function AuditPage({ params, searchParams }: PageProps<"/o/
   return (
     <>
       <PageHeader title="Audit log" description="Every administrative and security-relevant change, newest first. Entries can't be edited or deleted." />
+      <Panel className="mb-4" data-testid="audit-integrity">
+        <PanelHeader title="Integrity" description="Each entry carries a hash of its content and of the entry before it, so any change, removal or reordering shows up here." />
+        <div className="p-4"><SchemaForm action={verifyAuditAction.bind(null, orgSlug)} submitLabel="Verify the audit log" pendingLabel="Verifying…" fields={[]} /></div>
+      </Panel>
       <Panel>
         {rows.length === 0 ? <EmptyState title="No entries" /> : (
           <Table>

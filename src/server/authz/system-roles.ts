@@ -13,7 +13,7 @@ export type SystemRole = {
 };
 
 // org-level administration stays with org admins (audit log spans every property)
-const exceptOrgAdmin = (p: Permission) => !["org.settings.manage", "member.manage", "ai.settings.manage", "audit.read", "billing.manage", "api.manage", "integration.manage"].includes(p);
+const exceptOrgAdmin = (p: Permission) => !["org.settings.manage", "member.manage", "ai.settings.manage", "audit.read", "billing.manage", "api.manage", "integration.manage", "security.manage", "privacy.manage"].includes(p);
 
 const OPS_READ: Permission[] = [
   "org.read", "member.read", "portfolio.read", "property.read", "unit.read", "resident.read",

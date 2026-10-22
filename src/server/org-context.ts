@@ -1,16 +1,25 @@
 import "server-only";
 import { cache } from "react";
-import { notFound } from "next/navigation";
+import { headers } from "next/headers";
+import { notFound, redirect } from "next/navigation";
 import { requireSession } from "./auth/session";
-import { loadPrincipal } from "./modules/organizations/principal";
+import { orgPrincipalForSession } from "./org-session";
 import { requestMeta } from "./request-meta";
 import type { TenantCtx } from "./modules/context";
+import { safeNext } from "@/lib/safe-next";
 
-// resolves session + membership for /o/[orgSlug] routes; 404 when not a member (don't leak existence)
+// resolves session + membership for /o/[orgSlug] routes; 404 when not a member (don't leak existence).
+// The organization's security policy is enforced here: SSO or two-step verification when it requires them.
 export const getOrgContext = cache(async (orgSlug: string) => {
   const session = await requireSession();
-  const principal = await loadPrincipal(session.user.id, orgSlug);
+  const { principal, decision } = await orgPrincipalForSession(session, orgSlug);
   if (!principal) notFound();
+  if (!decision.ok) {
+    const here = safeNext((await headers()).get("x-pathname")) ?? `/o/${orgSlug}/dashboard`;
+    if (decision.reason === "sso_required") redirect(`/sso/org/${orgSlug}?next=${encodeURIComponent(here)}`);
+    if (decision.reason === "mfa_setup_required") redirect(`/account/security?required=${encodeURIComponent(orgSlug)}`);
+    redirect(`/session/renew?next=${encodeURIComponent(here)}`);
+  }
   const ctx: TenantCtx = { principal, meta: await requestMeta() };
   return { session, principal, ctx };
 });

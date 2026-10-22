@@ -9,11 +9,14 @@ import { ValidationError, type TenantCtx } from "@/server/modules/context";
 import { createApiKey, revokeApiKey } from "@/server/api/keys";
 import { createEndpoint, deleteEndpoint, replayDelivery, rotateSecret, sendTestEvent, setEndpointActive, updateEndpoint } from "@/server/webhooks/service";
 import { afterChange } from "@/server/after-change";
+import { requireRecentAuth } from "@/server/reauth";
 
 const base = (slug: string) => `/o/${slug}/settings/developers`;
 
 // these forms carry multi-value fields (scopes, events), so they parse FormData themselves
-async function run(slug: string, fd: FormData, fn: (ctx: TenantCtx) => Promise<Omit<ActionState, "ok">>, opts: { readOnlyOk?: boolean } = {}): Promise<ActionState> {
+async function run(slug: string, fd: FormData, fn: (ctx: TenantCtx) => Promise<Omit<ActionState, "ok">>, opts: { readOnlyOk?: boolean; recentAuth?: boolean } = {}): Promise<ActionState> {
+  // new credentials and signing secrets need a recent sign-in (finding F-09)
+  if (opts.recentAuth) await requireRecentAuth(base(slug));
   const values: Record<string, string> = {};
   for (const [k, v] of fd.entries()) if (typeof v === "string" && !k.startsWith("$ACTION")) values[k] = v;
   try {
@@ -31,7 +34,7 @@ export async function createApiKeyAction(slug: string, _: ActionState, fd: FormD
   return run(slug, fd, async (ctx) => {
     const r = await createApiKey(ctx, { name: str(fd, "name"), scopes: fd.getAll("scopes").map(String), propertyIds: fd.getAll("propertyIds").map(String).filter(Boolean), expiresInDays: str(fd, "expiresInDays") });
     return { message: "API key created.", data: { secret: r.token, label: "API key" } };
-  });
+  }, { recentAuth: true });
 }
 
 export async function revokeApiKeyAction(slug: string, _: ActionState, fd: FormData) {
@@ -42,7 +45,7 @@ export async function createEndpointAction(slug: string, _: ActionState, fd: For
   return run(slug, fd, async (ctx) => {
     const r = await createEndpoint(ctx, { url: str(fd, "url"), description: str(fd, "description"), events: fd.getAll("events").map(String) });
     return { message: "Endpoint added.", data: { secret: r.secret, label: "Signing secret", href: `${base(slug)}/webhooks/${r.id}` } };
-  });
+  }, { recentAuth: true });
 }
 
 export async function updateEndpointAction(slug: string, id: string, _: ActionState, fd: FormData) {
@@ -54,7 +57,7 @@ export async function setEndpointActiveAction(slug: string, id: string, active: 
 }
 
 export async function rotateSecretAction(slug: string, id: string, _: ActionState, fd: FormData) {
-  return run(slug, fd, async (ctx) => ({ message: "New secret created. The old one stops working now.", data: { secret: await rotateSecret(ctx, id), label: "Signing secret" } }));
+  return run(slug, fd, async (ctx) => ({ message: "New secret created. The old one stops working now.", data: { secret: await rotateSecret(ctx, id), label: "Signing secret" } }), { recentAuth: true });
 }
 
 export async function deleteEndpointAction(slug: string, id: string, _: ActionState, fd: FormData): Promise<ActionState> {
