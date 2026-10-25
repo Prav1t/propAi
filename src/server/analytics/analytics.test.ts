@@ -24,8 +24,11 @@ describe("periods", () => {
     expect(previousQuarterSpan(resolvePeriod("qtd", TZ, now), TZ)).toMatchObject({ fromDate: "2026-07-01", toDate: "2026-07-15" });
   });
   it("handles a DST change inside the period (25-hour day)", () => {
-    const p = periodFromDates("2026-11-01", "2026-11-01", TZ);
-    expect((p.to.getTime() - p.from.getTime()) / 3_600_000).toBe(25);
+    // Vancouver's last fall-back (B.C. stays on UTC-7 from November 2026), and a zone that still changes clocks
+    const hoursIn = (from: string, to: string, tz: string) => { const p = periodFromDates(from, to, tz); return (p.to.getTime() - p.from.getTime()) / 3_600_000; };
+    expect(hoursIn("2025-11-02", "2025-11-02", TZ)).toBe(25);
+    expect(hoursIn("2026-11-01", "2026-11-01", "America/Toronto")).toBe(25);
+    expect(hoursIn("2026-03-08", "2026-03-08", TZ)).toBe(23);
   });
   it("buckets like Postgres date_trunc (weeks start Monday)", () => {
     expect(bucketStarts(periodFromDates("2026-10-01", "2026-10-15", TZ), "week")).toEqual(["2026-09-28", "2026-10-05", "2026-10-12"]);
