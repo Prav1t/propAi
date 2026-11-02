@@ -69,7 +69,7 @@ export default function ApiReferencePage() {
           <h2 className="text-lg font-semibold">Authentication</h2>
           <p>Create a key in Organization → Developers and send it on every request: <code className="font-mono">Authorization: Bearer ak_…</code>. A key acts for the person who created it, limited to the permissions (and properties) chosen for it — never more than that person can do today.</p>
           <ul className="list-disc pl-5 text-muted">{API_SCOPES.map((s) => <li key={s.perm}><code className="font-mono text-[12px]">{s.perm}</code> — {s.label} ({s.access})</li>)}</ul>
-          <pre className="overflow-x-auto rounded-[var(--radius-md)] bg-subtle p-3 font-mono text-[12px]">{`curl ${env().APP_URL}/api/v1/work-orders?status=new,acknowledged&limit=10 \\\n  -H "Authorization: Bearer $API_KEY"`}</pre>
+          <pre tabIndex={0} aria-label="Example request" className="overflow-x-auto rounded-[var(--radius-md)] bg-subtle p-3 font-mono text-[12px]">{`curl ${env().APP_URL}/api/v1/work-orders?status=new,acknowledged&limit=10 \\\n  -H "Authorization: Bearer $API_KEY"`}</pre>
         </section>
         <section id="pagination" className="mt-8 space-y-2 text-sm">
           <h2 className="text-lg font-semibold">Pagination</h2>

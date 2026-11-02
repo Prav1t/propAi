@@ -47,6 +47,7 @@ export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assista
   }
 
   const encoder = new TextEncoder();
+  let cancelled = false; // the person closed the page or pressed Stop
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (ev: AssistantEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(ev)}\n`));
@@ -54,7 +55,9 @@ export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assista
         if (!first.done) send(first.value);
         for await (const ev of gen) send(ev);
       } catch (e) {
-        log.error("ai.stream_failed", { error: e instanceof Error ? e.message : String(e) });
+        // writing to a stream the browser has left isn't a failure of the assistant
+        if (cancelled || req.signal.aborted) log.debug("ai.stream_aborted", { error: e instanceof Error ? e.message : String(e) });
+        else log.error("ai.stream_failed", { error: e instanceof Error ? e.message : String(e) });
         try {
           send({ type: "error", code: "internal", message: "Something went wrong while answering. Please try again." });
         } catch {
@@ -71,6 +74,7 @@ export async function POST(req: Request, ctx: RouteContext<"/o/[orgSlug]/assista
       await afterChange();
     },
     async cancel() {
+      cancelled = true;
       await gen.return(undefined);
     },
   });

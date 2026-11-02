@@ -9,6 +9,10 @@ const LABELS: Record<string, string> = {
   "member.invitation_revoked": "revoked an invitation",
   "member.joined": "joined the organization",
   "member.role_changed": "changed a member's role",
+  "role.created": "created a custom role",
+  "role.updated": "changed a custom role's permissions",
+  "role.deleted": "deleted a custom role",
+  "session.revoked_by_admin": "signed a member out of their devices",
   "member.deactivated": "deactivated a member",
   "member.reactivated": "reactivated a member",
   // Iteration 11: security and privacy

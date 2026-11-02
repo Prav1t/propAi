@@ -85,10 +85,15 @@ describe("helpers", () => {
     expect(peakConcurrency(w, [{ start: at("2026-10-03T10:00"), end: at("2026-10-03T11:00") }, { start: at("2026-10-03T10:30"), end: at("2026-10-03T11:30") }])).toBe(2);
   });
   it("day window and local parts are DST-safe", () => {
-    const w = dayWindow(base, "2026-11-01", TZ); // DST ends this morning in Vancouver
-    expect(localParts(w.start, TZ)).toEqual({ date: "2026-11-01", minute: 480 });
-    expect(localParts(w.end, TZ)).toEqual({ date: "2026-11-01", minute: 1380 });
-    expect(dayWindow({ opensAtMinute: 0, closesAtMinute: 1440 }, "2026-11-01", TZ).end.getTime() - dayWindow({ opensAtMinute: 0, closesAtMinute: 1440 }, "2026-11-01", TZ).start.getTime()).toBe(25 * 3_600_000);
+    // Vancouver's last fall-back: British Columbia stays on UTC-7 from November 2026 (tz data 2026e), so the
+    // clock-change cases use dates the time-zone database can't revise
+    const w = dayWindow(base, "2025-11-02", TZ);
+    expect(localParts(w.start, TZ)).toEqual({ date: "2025-11-02", minute: 480 });
+    expect(localParts(w.end, TZ)).toEqual({ date: "2025-11-02", minute: 1380 });
+    const fullDay = (date: string, tz: string) => { const d = dayWindow({ opensAtMinute: 0, closesAtMinute: 1440 }, date, tz); return d.end.getTime() - d.start.getTime(); };
+    expect(fullDay("2025-11-02", TZ)).toBe(25 * 3_600_000);
+    expect(fullDay("2026-03-08", TZ)).toBe(23 * 3_600_000); // spring forward
+    expect(fullDay("2026-11-01", "America/Toronto")).toBe(25 * 3_600_000); // zones that still change clocks
   });
   it("parses HH:MM and summarises rules", () => {
     expect(parseMinute("07:30")).toBe(450);

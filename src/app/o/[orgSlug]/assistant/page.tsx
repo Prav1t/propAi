@@ -11,6 +11,9 @@ import { AssistantChat, type TurnUi } from "@/components/ai/assistant-chat";
 import { ConfirmAction } from "@/components/ui/confirm-action";
 import { Icon } from "@/components/shell/icons";
 import { cn } from "@/lib/cn";
+import { bottomTabsFor } from "@/config/navigation";
+import { getEntitlements } from "@/server/billing/entitlements";
+import { transcriberFor } from "@/server/ai/transcribe";
 import { relative } from "@/lib/time";
 import { archiveConversationAction } from "./actions";
 
@@ -28,6 +31,7 @@ export default async function AssistantPage({ params, searchParams }: PageProps<
     conversationId ? orNotFound(getConversationView(ctx, conversationId)) : Promise.resolve(null),
   ]);
   const status = providerStatus();
+  const voiceOn = (await getEntitlements(principal.orgId)).flags.voice_input;
   const modes = modesFor(principal).map((m) => ({ key: m, label: MODES[m].label, description: MODES[m].description, suggestions: MODES[m].suggestions }));
   const mode = view ? view.conversation.mode : pickMode(principal, sp(q.mode));
   const turns: TurnUi[] = (view?.turns ?? []).map((t): TurnUi => {
@@ -68,6 +72,8 @@ export default async function AssistantPage({ params, searchParams }: PageProps<
           demo={{ on: status.demo, reason: status.reason }}
           autoAsk={view ? null : sp(q.q) ?? null}
           resident={principal.role.category === "resident"}
+          tabBar={bottomTabsFor(principal.role, principal.permissions).length > 0}
+          voice={voiceOn ? { transcribeUrl: transcriberFor() ? `${base}/transcribe` : null } : null}
           headerActions={view ? (
             <ConfirmAction key="delete" action={archiveConversationAction} label="Delete" confirmLabel="Delete conversation" variant="secondary"
               description="Remove this conversation from your history? The usage log your organization's admins see isn't affected."

@@ -88,7 +88,7 @@ export default async function ShiftsPage({ params, searchParams }: PageProps<"/o
           </div>
         </div>
         {people.length === 0 ? <EmptyState title="No shifts this week" /> : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Shifts this week (scrolls sideways)">
             <table className="w-full min-w-[760px] border-collapse text-[12px]">
               <caption className="sr-only">Shifts by person and day</caption>
               <thead><tr><th scope="col" className="w-40 border-b border-border px-3 py-2 text-left font-medium text-muted">Person</th>
@@ -107,7 +107,7 @@ export default async function ShiftsPage({ params, searchParams }: PageProps<"/o
                           {cell.map((s) => (
                             <div key={s.id} title={`${SHIFT_POSITION[s.position]} · ${s.propertyName}${s.notes ? ` — ${s.notes}` : ""}`}
                               className={`mb-1 rounded px-1.5 py-1 ${s.onCall ? "border border-dashed border-accent/50 text-accent" : "bg-accent-soft text-accent"}`}>
-                              {time(s.startsAt, tz)}–{time(s.endsAt, tz)}<span className="block text-[11px] opacity-80">{s.onCall ? "On call" : SHIFT_POSITION[s.position]}</span>
+                              {time(s.startsAt, tz)}–{time(s.endsAt, tz)}<span className="block text-[11px]">{s.onCall ? "On call" : SHIFT_POSITION[s.position]}</span>
                             </div>
                           ))}
                         </td>

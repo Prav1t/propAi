@@ -4,6 +4,7 @@ import type { ActionState } from "@/lib/action-state";
 import { initialActionState } from "@/lib/action-state";
 import { FormAlert, Select } from "@/components/ui/form";
 import { SubmitButton } from "@/components/ui/button";
+import { PhotoPicker } from "@/components/ui/photo-picker";
 
 type F = { id: string; filename: string; contentType: string; sizeBytes: number; visibility: string };
 
@@ -35,10 +36,8 @@ export function UploadForm({ action, levels }: { action: (s: ActionState, fd: Fo
     <form action={formAction} className="space-y-2 border-t border-border p-3">
       <FormAlert>{state.error}</FormAlert>
       <FormAlert kind="success">{state.ok ? state.message : null}</FormAlert>
-      <label className="block text-[13px] font-medium" htmlFor="upload-files">Add photos or files</label>
-      <input id="upload-files" name="files" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/heic,application/pdf,video/mp4,video/quicktime"
-        capture={undefined} className="block w-full text-[13px] file:mr-3 file:rounded-[var(--radius-md)] file:border file:border-border-strong file:bg-surface file:px-3 file:py-1.5 file:text-[13px]" />
-      <p className="text-xs text-faint">Up to 5 files · images 10 MB, PDFs 15 MB, video 25 MB.</p>
+      <PhotoPicker id="upload-files" label="Add photos or files" accept="image/jpeg,image/png,image/webp,image/gif,image/heic,application/pdf,video/mp4,video/quicktime"
+        hint="Up to 5 files · images 10 MB, PDFs 15 MB, video 25 MB." />
       <div className="flex items-center gap-2">
         {levels.length > 1 ? (
           <Select name="visibility" className="h-8 w-auto text-[13px]" defaultValue={levels.includes("vendor") ? "vendor" : levels[0]} aria-label="Who can see these files">

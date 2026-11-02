@@ -15,6 +15,8 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",
+    // the app's service worker would sit between page.route() and the network; tests about it opt back in
+    serviceWorkers: "block",
     launchOptions: process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : undefined,
   },
   projects: [
@@ -26,7 +28,8 @@ export default defineConfig({
     // local webhook receivers in the API → webhook test listen on 127.0.0.1 (never allowed in production);
     // DEV_FS_CACHE=off keeps the dev server inside small CI memory limits (see next.config.ts)
     // OIDC_ALLOW_HTTP_ISSUERS: the SSO test runs a local OpenID Connect provider on http://127.0.0.1 (refused in production)
-    env: { RATE_LIMITS: "relaxed", WEBHOOK_ALLOW_PRIVATE_TARGETS: "true", DEV_FS_CACHE: "off", OIDC_ALLOW_HTTP_ISSUERS: "true" },
+    // E2E_FAULTS: lets the error-page tests make a named point fail (src/server/dev-faults.ts; inert in production)
+    env: { RATE_LIMITS: "relaxed", WEBHOOK_ALLOW_PRIVATE_TARGETS: "true", DEV_FS_CACHE: "off", OIDC_ALLOW_HTTP_ISSUERS: "true", E2E_FAULTS: "true" },
     url: "http://localhost:3000/api/health",
     reuseExistingServer: true,
     timeout: 120_000,

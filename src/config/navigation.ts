@@ -83,3 +83,62 @@ export function visibleNav(permissions: ReadonlySet<string>, category: string = 
   const ok = (i: NavItem) => !i.anyOf || i.anyOf.some((p) => permissions.has(p)) || (category === "resident" && !!i.residentsAlso?.some((p) => permissions.has(p)));
   return NAV.map((s) => ({ ...s, items: s.items.filter(ok).map((i) => (category === "resident" && i.residentLabel ? { ...i, label: i.residentLabel } : i)) })).filter((s) => s.items.length);
 }
+
+// phone bottom bar: the few places each kind of role goes most, shown when it leaves at least two
+export type BottomTab = { label: string; href: (slug: string) => string; icon: string; anyOf?: Permission[]; badgeKey?: string };
+const TAB = {
+  home: { label: "Home", href: (s: string) => `/o/${s}/dashboard`, icon: "home" },
+  assistant: { label: "Assistant", href: (s: string) => `/o/${s}/assistant`, icon: "sparkle", anyOf: ["ai.use"] },
+} satisfies Record<string, BottomTab>;
+const BOTTOM_TABS: Record<"resident" | "frontdesk" | "maintenance" | "facility" | "vendor" | "manager", BottomTab[]> = {
+  resident: [
+    TAB.home,
+    { label: "Requests", href: (s) => `/o/${s}/maintenance`, icon: "wrench", anyOf: ["workorder.create"] },
+    { label: "Book", href: (s) => `/o/${s}/amenities`, icon: "calendar", anyOf: ["amenity.read"] },
+    { label: "Packages", href: (s) => `/o/${s}/packages`, icon: "box", anyOf: ["package.read.own"], badgeKey: "packages" },
+    { label: "Messages", href: (s) => `/o/${s}/messages`, icon: "message", anyOf: ["message.use"], badgeKey: "messages" },
+  ],
+  frontdesk: [
+    { label: "Desk", href: (s) => `/o/${s}/desk`, icon: "desk", anyOf: ["visitor.manage", "package.manage"] },
+    { label: "Packages", href: (s) => `/o/${s}/packages`, icon: "box", anyOf: ["package.manage"] },
+    { label: "Visitors", href: (s) => `/o/${s}/visitors`, icon: "badge", anyOf: ["visitor.manage"], badgeKey: "visitors" },
+    { label: "Incidents", href: (s) => `/o/${s}/incidents`, icon: "alert", anyOf: ["incident.read", "incident.create"] },
+    { label: "Messages", href: (s) => `/o/${s}/messages`, icon: "message", anyOf: ["message.manage"], badgeKey: "messages" },
+  ],
+  maintenance: [
+    TAB.home,
+    { label: "My jobs", href: (s) => `/o/${s}/maintenance?view=mine`, icon: "wrench", anyOf: ["workorder.read", "workorder.read.assigned"] },
+    { label: "Tasks", href: (s) => `/o/${s}/tasks?view=mine`, icon: "check", anyOf: ["task.read", "task.manage"] },
+    { label: "Inspections", href: (s) => `/o/${s}/inspections`, icon: "clipboard", anyOf: ["inspection.read", "inspection.manage"] },
+    { label: "Shifts", href: (s) => `/o/${s}/shifts`, icon: "clock", anyOf: ["shift.read", "shift.manage"] },
+  ],
+  facility: [
+    TAB.home,
+    { label: "Assets", href: (s) => `/o/${s}/assets`, icon: "gear", anyOf: ["asset.read", "asset.manage"] },
+    { label: "Work", href: (s) => `/o/${s}/maintenance`, icon: "wrench", anyOf: ["workorder.read", "workorder.read.assigned"] },
+    { label: "Inspections", href: (s) => `/o/${s}/inspections`, icon: "clipboard", anyOf: ["inspection.read", "inspection.manage"] },
+    { label: "Calendar", href: (s) => `/o/${s}/calendar`, icon: "clock", anyOf: ["workorder.read", "inspection.read", "asset.read"] },
+  ],
+  vendor: [
+    TAB.home,
+    { label: "Jobs", href: (s) => `/o/${s}/maintenance`, icon: "wrench", anyOf: ["workorder.read.assigned", "workorder.read"] },
+  ],
+  manager: [
+    TAB.home,
+    { label: "Maintenance", href: (s) => `/o/${s}/maintenance`, icon: "wrench", anyOf: ["workorder.read"] },
+    { label: "Tasks", href: (s) => `/o/${s}/tasks`, icon: "check", anyOf: ["task.read", "task.manage"] },
+    { label: "Approvals", href: (s) => `/o/${s}/automations?tab=approvals`, icon: "bolt", anyOf: ["automation.manage"], badgeKey: "approvals" },
+    TAB.assistant,
+  ],
+};
+
+export function bottomTabsFor(role: { key: string; category: string; scopeLevel: string }, permissions: ReadonlySet<string>): BottomTab[] {
+  const set = role.scopeLevel === "occupant" ? "resident"
+    : ["concierge", "security"].includes(role.key) ? "frontdesk"
+    : ["maintenance_staff", "staff"].includes(role.key) ? "maintenance"
+    : role.key === "facility_manager" ? "facility"
+    : role.category === "external" ? "vendor"
+    : "manager";
+  const tabs = BOTTOM_TABS[set].filter((t) => !t.anyOf || t.anyOf.some((p) => permissions.has(p)));
+  return tabs.length >= 2 ? tabs : [];
+}

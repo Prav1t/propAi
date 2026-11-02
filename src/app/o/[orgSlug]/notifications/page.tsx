@@ -2,11 +2,12 @@ import { getOrgContext, sp } from "@/server/org-context";
 import { getPreferences, listNotifications } from "@/server/modules/notifications/service";
 import { EmptyState, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { LinkTabs } from "@/components/ui/tabs";
-import { ActionButton } from "@/components/ops/action-button";
+import { NotificationList } from "@/components/ops/notification-list";
 import { PreferencesForm } from "@/components/ops/preferences-form";
-import { cn } from "@/lib/cn";
 import { fmtDateTime, relative } from "@/lib/time";
-import { markReadAction, openNotificationAction, savePreferencesAction } from "../ops-actions";
+import { markAllReadAction, openNotificationAction, savePreferencesAction, subscribePushAction, unsubscribePushAction } from "../ops-actions";
+import { PushSettings } from "@/components/ops/push-settings";
+import { myPushDevices, pushAvailable, vapidPublicKey } from "@/server/push/service";
 
 export const metadata = { title: "Notifications" };
 
@@ -18,31 +19,28 @@ export default async function NotificationsPage({ params, searchParams }: PagePr
   const base = `/o/${orgSlug}/notifications`;
   const items = tab === "settings" ? [] : await listNotifications(ctx, { unreadOnly: tab === "unread", limit: 100 });
   const prefs = tab === "settings" ? await getPreferences(ctx) : [];
+  const devices = tab === "settings" ? await myPushDevices(ctx) : [];
+  const pushKey = tab === "settings" && (await pushAvailable(principal.orgId)) ? vapidPublicKey() : null;
   return (
     <>
-      <PageHeader title="Notifications" actions={tab !== "settings" && items.some((n) => !n.readAt) ? <ActionButton action={markReadAction.bind(null, orgSlug, "all")} label="Mark all read" /> : null} />
+      <PageHeader title="Notifications" />
       <Panel>
-        <LinkTabs active={tab} tabs={[{ key: "all", label: "All", href: base }, { key: "unread", label: "Unread", href: `${base}?tab=unread` }, { key: "settings", label: "Email settings", href: `${base}?tab=settings` }]} />
+        <LinkTabs active={tab} tabs={[{ key: "all", label: "All", href: base }, { key: "unread", label: "Unread", href: `${base}?tab=unread` }, { key: "settings", label: "Settings", href: `${base}?tab=settings` }]} />
         {tab === "settings" ? (
           <>
-            <PanelHeader title="What should we email you?" description="In-app notifications always appear here. Choose which ones also send an email." />
-            <PreferencesForm action={savePreferencesAction.bind(null, orgSlug)} prefs={prefs} />
+            <PanelHeader title="Push notifications" description="Alerts on your phone or computer, even when the app is closed." />
+            <PushSettings publicKey={pushKey} subscribe={subscribePushAction.bind(null, orgSlug)} unsubscribe={unsubscribePushAction.bind(null, orgSlug)}
+              devices={devices.map((d) => ({ endpoint: d.endpoint, userAgent: d.userAgent, createdAt: d.createdAt.toISOString(), lastSuccessAt: d.lastSuccessAt?.toISOString() ?? null }))} />
+            <div className="border-t border-border" />
+            <PanelHeader title="What should we send you?" description={devices.length ? "Choose, for each kind of notification, where it goes." : "In-app notifications always appear here. Choose which ones also send an email."} />
+            <PreferencesForm action={savePreferencesAction.bind(null, orgSlug)} prefs={prefs} push={devices.length > 0} />
           </>
         ) : items.length === 0 ? <EmptyState title={tab === "unread" ? "You're all caught up" : "No notifications yet"} /> : (
-          <ul className="divide-y divide-border">
-            {items.map((n) => (
-              <li key={n.id} className={cn("flex items-start gap-3 px-4 py-3", !n.readAt && "bg-accent-soft/30")}>
-                <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-accent")} />
-                <form action={openNotificationAction.bind(null, orgSlug, n.id, n.href)} className="min-w-0 flex-1">
-                  <button className="block w-full text-left">
-                    <span className={cn("block text-sm", !n.readAt && "font-medium")}>{n.title}{!n.readAt ? <span className="sr-only"> (unread)</span> : null}</span>
-                    {n.body ? <span className="block truncate text-[13px] text-muted">{n.body}</span> : null}
-                    <time className="text-xs text-faint" dateTime={n.createdAt.toISOString()} title={fmtDateTime(n.createdAt, principal.orgTimezone)}>{relative(n.createdAt)}</time>
-                  </button>
-                </form>
-              </li>
-            ))}
-          </ul>
+          <NotificationList markAll={markAllReadAction.bind(null, orgSlug)} items={items.map((n) => ({
+            id: n.id, title: n.title, body: n.body, readAt: !!n.readAt, createdAt: n.createdAt.toISOString(),
+            when: relative(n.createdAt), whenTitle: fmtDateTime(n.createdAt, principal.orgTimezone),
+            open: openNotificationAction.bind(null, orgSlug, n.id, n.href),
+          }))} />
         )}
       </Panel>
     </>

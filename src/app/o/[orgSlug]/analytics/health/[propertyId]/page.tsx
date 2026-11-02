@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getOrgContext } from "@/server/org-context";
 import { propertyHealth } from "@/server/analytics/health";
 import { getAnalyticsSettings } from "@/server/analytics/settings";
+import { Breadcrumbs } from "@/components/ui/nav-bits";
 import { PageHeader, Panel, PanelHeader, Table, Td, Th } from "@/components/ui/primitives";
 import { HealthBadge, Meter } from "@/components/analytics/bits";
 
@@ -20,7 +21,8 @@ export default async function HealthPage({ params }: PageProps<"/o/[orgSlug]/ana
   const totalWeight = used.reduce((s, f) => s + f.weight, 0);
   return (
     <>
-      <PageHeader title={`${h.name} — health`} description={<><Link href={`${base}/analytics`} className="text-accent hover:underline">Analytics</Link> · {h.units} units · score out of 100, from the last 30 days of recorded data (inspections: 90 days)</>} />
+      <Breadcrumbs items={[{ label: "Analytics", href: `${base}/analytics` }, { label: `${h.name} health` }]} />
+      <PageHeader title={`${h.name} — health`} description={`${h.units} units · score out of 100, from the last 30 days of recorded data (inspections: 90 days)`} />
       <Panel className="mb-6">
         <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-4">
           <HealthBadge score={h.score} grade={h.grade} />

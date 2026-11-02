@@ -15,7 +15,7 @@ export function InspectionItemForm({ action, item }: { action: (s: ActionState, 
       <input type="hidden" name="result" value={result} />
       <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Result">
         {[["pass", "Pass"], ["fail", "Fail"], ["na", "N/A"]].map(([v, l]) => (
-          <label key={v} className={cn("cursor-pointer rounded-[var(--radius-md)] border px-2.5 py-1 text-[13px] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40",
+          <label key={v} className={cn("cursor-pointer rounded-[var(--radius-md)] border px-2.5 py-1 text-[13px] pointer-coarse:px-4 pointer-coarse:py-2.5 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40",
             result === v ? (v === "fail" ? "border-danger bg-danger-soft text-danger" : v === "pass" ? "border-success bg-success-soft text-success" : "border-accent bg-accent-soft text-accent") : "border-border-strong hover:bg-subtle")}>
             <input type="radio" name="_result" value={v} checked={result === v} onChange={() => setResult(v)} className="sr-only" />{l}
           </label>

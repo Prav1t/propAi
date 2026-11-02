@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listSavedViews } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { canManageVisitors, canUseVisitors, listVisitors, visitorFormOptions, visitorStats, type VisitorView } from "@/server/modules/visitors/service";
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th } from "@/components/ui/primitives";
@@ -18,6 +19,7 @@ export default async function VisitorsPage({ params, searchParams }: PageProps<"
   const { orgSlug } = await params;
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
+  const savedViews = await listSavedViews(ctx, "visitors");
   if (!canUseVisitors(principal)) notFound();
   const staff = canManageVisitors(principal);
   const base = `/o/${orgSlug}/visitors`;
@@ -84,9 +86,9 @@ export default async function VisitorsPage({ params, searchParams }: PageProps<"
       ) : null}
       <Panel>
         <LinkTabs active={view} tabs={views.map((v) => ({ key: v.key, label: v.label, href: keep(v.key), count: v.key === view ? data.total : null }))} />
-        <FilterBar searchPlaceholder="Name, company, unit or plate…" filters={opts.buildings.length > 1 ? [{ name: "building", label: "Building", options: opts.buildings.map((b) => ({ value: b.id, label: `${b.propertyName} · ${b.name}` })) }] : []} />
+        <FilterBar saved={{ orgSlug, page: "visitors", views: savedViews }} searchPlaceholder="Name, company, unit or plate…" filters={opts.buildings.length > 1 ? [{ name: "building", label: "Building", options: opts.buildings.map((b) => ({ value: b.id, label: `${b.propertyName} · ${b.name}` })) }] : []} />
         {data.rows.length === 0 ? <EmptyState title={view === "today" ? "Nobody else expected today" : "No visitors here"} /> : (
-          <Table>
+          <Table cards>
             <thead><tr><Th>Visitor</Th><Th>Visiting</Th><Th className="hidden md:table-cell">When</Th><Th>Status</Th><Th><span className="sr-only">Actions</span></Th></tr></thead>
             <tbody>
               {data.rows.map((v) => (
@@ -95,9 +97,9 @@ export default async function VisitorsPage({ params, searchParams }: PageProps<"
                     <Link href={`${base}/${v.id}`} className="font-medium hover:underline">{v.name}</Link>
                     <div className="text-xs text-faint">{[VISITOR_KIND[v.kind], v.company, v.plate ? fmtPlate(v.plate) : null, v.needsParking ? "needs parking" : null].filter(Boolean).join(" · ")}</div>
                   </Td>
-                  <Td className="text-[13px]">{v.unitNumber ? `Unit ${v.unitNumber}` : "Common areas"}<div className="text-xs text-faint">{v.buildingName}</div></Td>
-                  <Td className="hidden text-[13px] md:table-cell">{fmtRange(v.expectedFrom, v.expectedUntil, v.tz)}</Td>
-                  <Td><Badge tone={v.overstay ? "warning" : VISITOR_STATUS[v.status]?.tone}>{v.overstay ? "Past window" : v.status === "expected" && v.expectedUntil < new Date() ? "No-show" : VISITOR_STATUS[v.status]?.label}</Badge></Td>
+                  <Td label="Visiting" className="text-[13px]">{v.unitNumber ? `Unit ${v.unitNumber}` : "Common areas"}<div className="text-xs text-faint">{v.buildingName}</div></Td>
+                  <Td label="When" className="hidden text-[13px] md:table-cell">{fmtRange(v.expectedFrom, v.expectedUntil, v.tz)}</Td>
+                  <Td label="Status"><Badge tone={v.overstay ? "warning" : VISITOR_STATUS[v.status]?.tone}>{v.overstay ? "Past window" : v.status === "expected" && v.expectedUntil < new Date() ? "No-show" : VISITOR_STATUS[v.status]?.label}</Badge></Td>
                   <Td className="text-right">
                     {v.status === "checked_in" ? <ActionButton action={checkOutVisitorAction.bind(null, orgSlug, v.id)} label="Check out" />
                       : v.status === "expected" ? <Link href={`${base}/${v.id}`} className="text-[13px] font-medium text-accent hover:underline">Check in</Link> : null}

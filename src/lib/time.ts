@@ -45,3 +45,11 @@ export function zonedParts(d: Date, timeZone: string) {
   const s = utcToZonedInput(d, timeZone);
   return { date: s.slice(0, 10), time: s.slice(11, 16) };
 }
+
+// a calendar date ("2026-11-03") as "Nov 3" (or "Nov 3, 2027" outside the current year); no time zone involved
+export function fmtDay(isoDate: string, now = new Date()): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  if (!y || !m || !d) return isoDate;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.toLocaleDateString("en-CA", { timeZone: "UTC", month: "short", day: "numeric", ...(y !== now.getUTCFullYear() ? { year: "numeric" } : {}) });
+}

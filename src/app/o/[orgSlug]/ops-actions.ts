@@ -31,18 +31,38 @@ const filesFrom = (fd: FormData) => fd.getAll("files").filter((f): f is File => 
 
 /* ───── maintenance ───── */
 
+// the form carries a draft reference (clientRef): submitting twice, or sending a draft saved while offline after the
+// first attempt actually arrived, gives back the same request instead of a duplicate
+const clientRefOf = (fd: FormData) => { const v = fd.get("clientRef"); return typeof v === "string" && v ? v : null; };
+
 export async function createWorkOrderAction(slug: string, _: ActionState, fd: FormData) {
   const files = filesFrom(fd);
   let uploadFailed = false;
   return runOrgForm({
     orgSlug: slug, fd, schema: createWoSchema,
     run: async (c, d) => {
-      const r = await createWorkOrder(c, d);
+      const r = await createWorkOrder(c, d, { clientRef: clientRefOf(fd) });
       // the request is saved even if a photo is rejected; the page tells the user to retry the upload
-      if (files.length) await uploadFiles(c, "work_order", r.workOrder.id, files, "public").catch(() => { uploadFailed = true; });
+      if (files.length && !r.duplicate) await uploadFiles(c, "work_order", r.workOrder.id, files, "public").catch(() => { uploadFailed = true; });
       return r;
     },
     done: (r) => ({ redirectTo: `${base(slug)}/maintenance/${r.workOrder.id}?created=1${uploadFailed ? "&upload=failed" : ""}` }),
+  });
+}
+
+// sends a request that was saved on the device while offline (no redirect: it runs in the background)
+export async function sendWorkOrderDraftAction(slug: string, fd: FormData): Promise<ActionState> {
+  const files = filesFrom(fd);
+  if (!clientRefOf(fd)) return { error: "Invalid draft." };
+  let uploadFailed = false;
+  return runOrgForm({
+    orgSlug: slug, fd, schema: createWoSchema,
+    run: async (c, d) => {
+      const r = await createWorkOrder(c, d, { clientRef: clientRefOf(fd) });
+      if (files.length && !r.duplicate) await uploadFiles(c, "work_order", r.workOrder.id, files, "public").catch(() => { uploadFailed = true; });
+      return r;
+    },
+    done: (r) => ({ message: `Request #${r.workOrder.number} sent.`, data: { id: r.workOrder.id, number: r.workOrder.number, href: `${base(slug)}/maintenance/${r.workOrder.id}`, uploadFailed } }),
   });
 }
 
@@ -114,8 +134,10 @@ const taskStatusSchema = z.object({ status: z.enum(TASK_STATUSES), note: z.strin
 export async function setTaskStatusAction(slug: string, id: string, _: ActionState, fd: FormData) {
   return runOrgForm({ orgSlug: slug, fd, schema: taskStatusSchema, run: (c, d) => setTaskStatus(c, id, d.status, d.note || null), done: () => ({ message: "Status updated." }) });
 }
-export async function toggleChecklistAction(slug: string, itemId: string, done: boolean, _: ActionState, fd: FormData) {
-  return runOrgForm({ orgSlug: slug, fd, schema: none, run: (c) => toggleChecklistItem(c, itemId, done), done: () => ({ message: "Saved." }) });
+// called directly by the optimistic checklist (no form); the same checks as every org form
+export async function setChecklistItemAction(slug: string, itemId: string, done: boolean): Promise<ActionState> {
+  if (typeof itemId !== "string" || typeof done !== "boolean") return { error: "Invalid request." };
+  return runOrgForm({ orgSlug: slug, fd: new FormData(), schema: none, run: (c) => toggleChecklistItem(c, itemId, done), done: () => ({ message: "Saved." }) });
 }
 const memberSchema = z.object({ membershipId: z.union([z.literal(""), z.string().uuid()]).optional().transform((v) => v || null) });
 export async function assignTaskAction(slug: string, id: string, _: ActionState, fd: FormData) {
@@ -171,8 +193,10 @@ export async function commentComplaintAction(slug: string, id: string, _: Action
 
 /* ───── notifications ───── */
 
-export async function markReadAction(slug: string, id: string | "all", _: ActionState, fd: FormData) {
-  return runOrgForm({ orgSlug: slug, fd, schema: none, run: (c) => markRead(c, id), done: () => ({ message: "Marked as read." }) });
+
+// called directly by the optimistic notification list
+export async function markAllReadAction(slug: string): Promise<ActionState> {
+  return runOrgForm({ orgSlug: slug, fd: new FormData(), schema: none, run: (c) => markRead(c, "all"), done: () => ({ message: "Marked as read." }) });
 }
 
 // opening a notification marks it read, then follows its link (only same-org relative links are followed)
@@ -186,6 +210,42 @@ export async function openNotificationAction(slug: string, id: string, href: str
 }
 
 export async function savePreferencesAction(slug: string, _: ActionState, fd: FormData) {
-  const prefs = Object.keys(NOTIFICATION_KINDS).map((kind) => ({ kind, email: fd.get(`email:${kind}`) === "on", inApp: fd.get(`app:${kind}`) === "on" }));
+  const withPush = fd.get("withPush") === "1";
+  const prefs = Object.keys(NOTIFICATION_KINDS).map((kind) => ({ kind, email: fd.get(`email:${kind}`) === "on", inApp: fd.get(`app:${kind}`) === "on", ...(withPush ? { push: fd.get(`push:${kind}`) === "on" } : {}) }));
   return runOrgForm({ orgSlug: slug, fd, schema: none, run: (c) => savePreferences(c, prefs), done: () => ({ message: "Preferences saved." }) });
+}
+
+/* ───── bulk changes on the maintenance list ───── */
+
+export async function bulkWorkOrdersAction(slug: string, _: ActionState, fd: FormData): Promise<ActionState> {
+  const { bulkSchema, bulkUpdateWorkOrders } = await import("@/server/modules/maintenance/bulk");
+  const ids = fd.getAll("ids").filter((x): x is string => typeof x === "string");
+  return runOrgForm({
+    orgSlug: slug, fd, schema: bulkSchema,
+    run: (c, d) => bulkUpdateWorkOrders(c, ids, d),
+    done: (r) => {
+      const parts = [r.changed ? `Updated ${r.changed} work order${r.changed === 1 ? "" : "s"}.` : "Nothing was changed."];
+      if (r.unchanged) parts.push(`${r.unchanged} already ${r.unchanged === 1 ? "was" : "were"} that way.`);
+      if (r.failed.length) parts.push(`${r.failed.length} couldn't be changed:\n${r.failed.slice(0, 8).map((f) => `• ${f.number ? `#${f.number}` : "One request"}: ${f.reason}`).join("\n")}${r.failed.length > 8 ? `\n…and ${r.failed.length - 8} more` : ""}`);
+      return { message: parts.join(" "), data: { changed: r.changed, failed: r.failed.length } };
+    },
+  });
+}
+
+/* ───── push notifications on this device ───── */
+
+// a person's own devices: allowed in read-only mode (it changes no shared data); consent is recorded by the service
+export async function subscribePushAction(slug: string, subscription: unknown): Promise<ActionState> {
+  const { subscribePush, subscriptionSchema } = await import("@/server/push/service");
+  const parsed = subscriptionSchema.safeParse(subscription);
+  if (!parsed.success) return { error: "This browser gave an unexpected subscription." };
+  return runOrgForm({ orgSlug: slug, fd: new FormData(), schema: none, allowReadOnly: true,
+    run: (c) => subscribePush(c, parsed.data, c.meta?.userAgent ?? null), done: () => ({ message: "Push notifications are on for this device." }) });
+}
+
+export async function unsubscribePushAction(slug: string, endpoint: string): Promise<ActionState> {
+  const { unsubscribePush } = await import("@/server/push/service");
+  if (typeof endpoint !== "string" || endpoint.length > 800) return { error: "Invalid device." };
+  return runOrgForm({ orgSlug: slug, fd: new FormData(), schema: none, allowReadOnly: true,
+    run: (c) => unsubscribePush(c, endpoint), done: () => ({ message: "Push notifications are off for that device." }) });
 }

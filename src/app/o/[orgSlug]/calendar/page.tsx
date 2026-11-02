@@ -78,19 +78,19 @@ export default async function CalendarPage({ params, searchParams }: PageProps<"
       <Panel className="mb-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="flex items-center gap-2">
-            <Link className="rounded-[var(--radius-md)] border border-border-strong px-2 py-1 text-[13px] hover:bg-subtle" href={href({ date: prev })} aria-label="Previous">←</Link>
-            <Link className="rounded-[var(--radius-md)] border border-border-strong px-2 py-1 text-[13px] hover:bg-subtle" href={href({ date: today })}>Today</Link>
-            <Link className="rounded-[var(--radius-md)] border border-border-strong px-2 py-1 text-[13px] hover:bg-subtle" href={href({ date: next })} aria-label="Next">→</Link>
+            <Link className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-[var(--radius-md)] border border-border-strong px-2 py-1 text-[13px] hover:bg-subtle pointer-coarse:min-h-11 pointer-coarse:min-w-11" href={href({ date: prev })} aria-label="Previous">←</Link>
+            <Link className="inline-flex min-h-8 items-center rounded-[var(--radius-md)] border border-border-strong px-2 py-1 text-[13px] hover:bg-subtle pointer-coarse:min-h-11" href={href({ date: today })}>Today</Link>
+            <Link className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-[var(--radius-md)] border border-border-strong px-2 py-1 text-[13px] hover:bg-subtle pointer-coarse:min-h-11 pointer-coarse:min-w-11" href={href({ date: next })} aria-label="Next">→</Link>
             <h2 className="ml-2 text-sm font-semibold">{title}</h2>
           </div>
           <nav aria-label="Calendar view" className="flex gap-1 text-[13px]">
-            {VIEWS.map((v) => <Link key={v} href={href({ view: v })} aria-current={v === view ? "page" : undefined} className={`rounded-full px-2.5 py-1 capitalize ${v === view ? "bg-accent-soft font-medium text-accent" : "text-muted hover:bg-subtle"}`}>{v}</Link>)}
+            {VIEWS.map((v) => <Link key={v} href={href({ view: v })} aria-current={v === view ? "page" : undefined} className={`inline-flex min-h-7 items-center rounded-full px-2.5 py-1 capitalize pointer-coarse:min-h-11 ${v === view ? "bg-accent-soft font-medium text-accent" : "text-muted hover:bg-subtle"}`}>{v}</Link>)}
           </nav>
         </div>
         <form className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 text-[13px]" action={`/o/${orgSlug}/calendar`}>
           <input type="hidden" name="view" value={view} /><input type="hidden" name="date" value={anchor} />
           <fieldset className="flex flex-wrap gap-x-3 gap-y-1"><legend className="sr-only">Show</legend>
-            {allowed.map((s) => <label key={s} className="flex items-center gap-1.5"><input type="checkbox" name="src" value={s} defaultChecked={!selected.length || selected.includes(s)} className="size-3.5 accent-[var(--color-accent)]" />{CAL_SOURCE_LABEL[s]}</label>)}
+            {allowed.map((s) => <label key={s} className="flex min-h-6 items-center gap-1.5 pointer-coarse:min-h-11"><input type="checkbox" name="src" value={s} defaultChecked={!selected.length || selected.includes(s)} className="size-4 accent-[var(--color-accent)]" />{CAL_SOURCE_LABEL[s]}</label>)}
           </fieldset>
           {props.length > 1 ? (
             <label className="flex items-center gap-1.5"><span className="text-muted">Property</span>
@@ -110,7 +110,7 @@ export default async function CalendarPage({ params, searchParams }: PageProps<"
               const inMonth = d.slice(0, 7) === anchor.slice(0, 7);
               return (
                 <div key={d} className={`min-h-28 border-b border-l border-border p-1.5 first:border-l-0 ${inMonth ? "" : "bg-subtle/40"}`}>
-                  <Link href={href({ view: "day", date: d })} className={`mb-1 inline-block rounded px-1 text-[12px] ${d === today ? "bg-accent font-semibold text-accent-fg" : inMonth ? "text-fg" : "text-faint"}`}>{Number(d.slice(8))}</Link>
+                  <Link href={href({ view: "day", date: d })} className={`mb-1 inline-flex min-h-6 min-w-6 items-center justify-center rounded px-1 text-[12px] ${d === today ? "bg-accent font-semibold text-accent-fg" : inMonth ? "text-fg" : "text-faint"}`}>{Number(d.slice(8))}</Link>
                   <div className="space-y-1">{list.slice(0, 3).map((e) => <Chip key={`${e.source}-${e.id}`} e={e} tz={tz} compact />)}</div>
                   {list.length > 3 ? <Link href={href({ view: "day", date: d })} className="mt-1 block text-[11px] text-accent hover:underline">+{list.length - 3} more</Link> : null}
                 </div>
@@ -139,7 +139,7 @@ export default async function CalendarPage({ params, searchParams }: PageProps<"
                   <ul className="space-y-1.5">{byDay.get(d)!.map((e) => (
                     <li key={`${e.source}-${e.id}`} className="grid grid-cols-[90px_minmax(0,1fr)] gap-3 text-sm">
                       <span className="text-[13px] tabular-nums text-muted">{e.allDay ? "All day" : e.start.toLocaleTimeString("en-CA", { timeZone: tz, hour: "numeric", minute: "2-digit" })}</span>
-                      <span className="min-w-0"><Link href={e.href} className="font-medium hover:underline">{e.title}</Link> <span className="text-[12px] text-faint">· {TAG[e.source]}{e.pending ? " (awaiting approval)" : ""}{e.sub ? ` · ${e.sub}` : ""}</span></span>
+                      <span className="min-w-0"><Link href={e.href} className="inline-block py-0.5 font-medium hover:underline pointer-coarse:py-2">{e.title}</Link> <span className="text-[12px] text-faint">· {TAG[e.source]}{e.pending ? " (awaiting approval)" : ""}{e.sub ? ` · ${e.sub}` : ""}</span></span>
                     </li>
                   ))}</ul>
                 </li>

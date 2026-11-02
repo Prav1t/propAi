@@ -6,6 +6,7 @@ export const PERMISSIONS = {
   "member.read": { module: "organization", description: "View team members" },
   "member.manage": { module: "organization", description: "Invite, change roles, deactivate members" },
   "role.read": { module: "organization", description: "View roles and permissions" },
+  "role.manage": { module: "organization", description: "Create and edit custom roles" },
   "audit.read": { module: "organization", description: "View the audit log" },
   // portfolio
   "portfolio.read": { module: "portfolio", description: "View portfolios" },

@@ -41,6 +41,22 @@ if cur == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1] * 2) end
 local prev = tonumber(redis.call('GET', KEYS[2]) or '0')
 return { cur, prev }`;
 
+// the first hits after start-up can arrive while the connection is still opening: wait briefly instead of falling back
+const STARTING = new Set(["wait", "connecting", "connect"]);
+async function whenReady(redis: Redis, ms: number) {
+  if (!STARTING.has(redis.status)) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      redis.off("ready", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    timer.unref();
+    redis.once("ready", done);
+  });
+}
+
 export class RedisRateLimiter implements RateLimiter {
   private warned = 0;
   constructor(private redis: Redis, private fallback: RateLimiter = new MemoryRateLimiter(), private now: () => number = Date.now, private prefix = "rl:") {}
@@ -54,6 +70,7 @@ export class RedisRateLimiter implements RateLimiter {
     const t = this.now();
     const k = this.keys(key, windowMs, t);
     try {
+      await whenReady(this.redis, 500);
       const [cur, prev] = (await this.redis.eval(SLIDING, 2, k.cur, k.prev, windowMs)) as [number, number];
       const weighted = prev * ((windowMs - (t - k.start)) / windowMs) + cur;
       return { allowed: weighted <= limit, remaining: Math.max(0, Math.floor(limit - weighted)), resetAt: k.start + windowMs };
@@ -99,7 +116,14 @@ function baseLimiter(): RateLimiter {
   // short timeouts: a slow Redis must not hold up sign-in; commands fail fast and the fallback takes over
   const redis = new Redis(url, { lazyConnect: false, maxRetriesPerRequest: 1, connectTimeout: 2_000, commandTimeout: 1_000, enableOfflineQueue: false });
   redis.on("error", () => {}); // reported by RedisRateLimiter when a hit actually fails
+  redis.on("connect", () => unrefSocket(redis));
   return new RedisRateLimiter(redis);
+}
+
+// the limiter must never keep a process alive on its own: scripts (seed, key rotation) exit when their work is done,
+// and servers stay up through their own listeners
+export function unrefSocket(redis: Redis) {
+  (redis as unknown as { stream?: { unref?: () => void } }).stream?.unref?.();
 }
 export const rateLimiter = (): RateLimiter =>
   (g.__rateLimiter ??= relaxed() ? new ScaledLimiter(baseLimiter(), 100) : baseLimiter());

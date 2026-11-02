@@ -8,6 +8,8 @@ export const FLAGS = {
   integrations: { default: true, label: "Integrations", description: "Slack, Microsoft Teams and Twilio connections and the chat automation action." },
   advanced_analytics: { default: true, label: "Property health & insights", description: "Health scores and proactive insights on the analytics page and in the assistant." },
   self_serve_billing: { default: true, label: "Self-serve plan changes", description: "Organization admins can change plans themselves; when off, the billing page asks them to contact support." },
+  voice_input: { default: true, label: "Voice input", description: "Dictation in the assistant: the browser's speech recognition, or the speech-to-text provider when one is configured." },
+  web_push: { default: true, label: "Push notifications", description: "Browser and phone push notifications (also needs VAPID keys in the environment)." },
 } as const;
 
 export type FlagKey = keyof typeof FLAGS;

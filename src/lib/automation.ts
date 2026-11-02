@@ -364,5 +364,6 @@ export function describeWorkflow(w: Pick<WorkflowInput, "trigger" | "schedule" |
     when: describeTrigger(w, n),
     conditions: w.conditions.map((c) => describeCondition(w.trigger, c, n)),
     actions: w.actions.map((a) => describeAction(a, n)),
+    steps: w.actions.map((a) => ({ type: a.type, text: describeAction(a, n) })), // for the flow view
   };
 }

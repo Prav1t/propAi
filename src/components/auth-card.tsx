@@ -8,7 +8,7 @@ export function AuthCard({ title, description, children, footer }: { title: stri
         {description ? <p className="mt-1 text-sm text-muted">{description}</p> : null}
         <div className="mt-5">{children}</div>
       </div>
-      {footer ? <div className="mt-4 text-center text-[13px] text-muted">{footer}</div> : null}
+      {footer ? <div className="mt-4 text-center text-[13px] text-muted [&_a]:underline [&_a]:underline-offset-2">{footer}</div> : null}
     </>
   );
 }

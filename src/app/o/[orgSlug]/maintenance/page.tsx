@@ -1,10 +1,14 @@
 import Link from "next/link";
+import { listSavedViews } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { listWorkOrders, type WoView } from "@/server/modules/maintenance/service";
 import { PRIORITY_ORDER, WO_CATEGORIES, WO_STATUSES } from "@/server/modules/maintenance/rules";
 import { listPropertyOptions } from "@/server/modules/portfolio/service";
-import { Badge, EmptyState, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, hasFilters, ListEmpty, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
 import { LinkButton } from "@/components/ui/button";
+import { WorkOrderBulkBar } from "@/components/ops/bulk-bar";
+import { bulkAssignOptions } from "@/server/modules/maintenance/bulk";
+import { bulkWorkOrdersAction } from "../ops-actions";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
 import { LinkTabs } from "@/components/ui/tabs";
@@ -24,6 +28,7 @@ export default async function MaintenancePage({ params, searchParams }: PageProp
   const { orgSlug } = await params;
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
+  const savedViews = await listSavedViews(ctx, "maintenance");
   const staff = principal.permissions.has("workorder.read");
   const views = staff ? STAFF_VIEWS : OTHER_VIEWS;
   const view = (views.find((v) => v.key === sp(q.view))?.key ?? "open") as WoView;
@@ -33,6 +38,8 @@ export default async function MaintenancePage({ params, searchParams }: PageProp
     since, dueWithinMinutes: view === "due_soon" ? (await getAnalyticsSettings(ctx)).slaWarningMinutes : undefined,
   }));
   const props = staff ? await listPropertyOptions(ctx) : [];
+  // managers can change several at once; every row is still checked and audited on its own
+  const bulk = principal.permissions.has("workorder.manage") ? await bulkAssignOptions(ctx) : null;
   const base = `/o/${orgSlug}/maintenance`;
   const tz = principal.orgTimezone;
   const keep = (k: string) => { const s = new URLSearchParams(); for (const [a, b] of Object.entries(q)) if (typeof b === "string" && a !== "page" && a !== "view") s.set(a, b); s.set("view", k); return `${base}?${s}`; };
@@ -46,32 +53,37 @@ export default async function MaintenancePage({ params, searchParams }: PageProp
       />
       <Panel>
         <LinkTabs active={view} tabs={views.map((v) => ({ key: v.key, label: v.label, href: keep(v.key), count: v.key === view ? data.total : null }))} />
-        <FilterBar searchPlaceholder="Title or #number…" filters={[
+        <FilterBar saved={{ orgSlug, page: "maintenance", views: savedViews }} searchPlaceholder="Title or #number…" filters={[
           ...(staff ? [{ name: "property", label: "Property", options: props.map((p) => ({ value: p.id, label: p.name })) }] : []),
           { name: "category", label: "Category", options: WO_CATEGORIES.map((c) => ({ value: c, label: WO_CATEGORY[c] })) },
           ...(staff ? [{ name: "priority", label: "Priority", options: PRIORITY_ORDER.map((c) => ({ value: c, label: PRIORITY[c].label })) }] : []),
           { name: "status", label: "Status", options: WO_STATUSES.map((s) => ({ value: s, label: WO_STATUS[s].label })) },
         ]} />
+        {bulk && data.rows.length ? <WorkOrderBulkBar action={bulkWorkOrdersAction.bind(null, orgSlug)} staff={bulk.staff} vendors={bulk.vendors}
+          priorities={PRIORITY_ORDER.map((c) => ({ value: c, label: PRIORITY[c].label }))} /> : null}
         {data.rows.length === 0 ? (
-          <EmptyState title={view === "overdue" ? "Nothing overdue" : view === "emergency" ? "No open emergencies" : "No requests here"}>
+          <ListEmpty title={view === "overdue" ? "Nothing overdue" : view === "emergency" ? "No open emergencies" : "No requests here"}
+            filtered={hasFilters(q)} clearHref={`${base}?view=${view}`}
+            create={principal.permissions.has("workorder.create") && ["open", "all"].includes(view) ? { href: `${base}/new`, label: isResident ? "Submit a request" : "Create work order" } : null}>
             {isResident && view === "open" ? "When something needs fixing, submit a request and we'll keep you posted here." : null}
-          </EmptyState>
+          </ListEmpty>
         ) : (
-          <Table>
-            <thead><tr><Th className="w-16">#</Th><Th>Request</Th><Th>Status</Th><Th className="hidden md:table-cell">Priority</Th><Th className="hidden lg:table-cell">Assigned</Th><Th className="hidden sm:table-cell">{view === "completed" ? "Submitted" : "Due"}</Th></tr></thead>
+          <Table cards>
+            <thead><tr>{bulk ? <Th className="w-8"><span className="sr-only">Select</span></Th> : null}<Th className="w-16">#</Th><Th>Request</Th><Th>Status</Th><Th className="hidden md:table-cell">Priority</Th><Th className="hidden lg:table-cell">Assigned</Th><Th className="hidden sm:table-cell">{view === "completed" ? "Submitted" : "Due"}</Th></tr></thead>
             <tbody>
               {data.rows.map((w) => (
                 <tr key={w.id} className="hover:bg-subtle/60">
-                  <Td className="tabular-nums text-muted">{w.number}</Td>
+                  {bulk ? <Td label="Select"><input type="checkbox" name="ids" value={w.id} form="bulk-wo" aria-label={`Select #${w.number} ${w.title}`} className="size-4 accent-[var(--color-accent)] pointer-coarse:size-5" /></Td> : null}
+                  <Td label="#" className="tabular-nums text-muted">{w.number}</Td>
                   <Td>
                     <Link className="font-medium hover:underline" href={`${base}/${w.id}`}>{w.title}</Link>
                     {w.isEmergency ? <Badge tone="danger" className="ml-2">Emergency</Badge> : null}
                     <div className="text-xs text-faint">{[w.propertyName, w.buildingName, w.unitNumber ? `Unit ${w.unitNumber}` : w.area].filter(Boolean).join(" · ")} · {WO_CATEGORY[w.category] ?? w.category}</div>
                   </Td>
-                  <Td><Badge tone={WO_STATUS[w.status]?.tone}>{WO_STATUS[w.status]?.label ?? w.status}</Badge></Td>
-                  <Td className="hidden md:table-cell"><Badge tone={PRIORITY[w.priority]?.tone}>{PRIORITY[w.priority]?.label}</Badge></Td>
-                  <Td className="hidden text-[13px] text-muted lg:table-cell">{[w.assigneeName, w.vendorName].filter(Boolean).join(" · ") || <span className="text-faint">Unassigned</span>}</Td>
-                  <Td className="hidden text-[13px] sm:table-cell">
+                  <Td label="Status"><Badge tone={WO_STATUS[w.status]?.tone}>{WO_STATUS[w.status]?.label ?? w.status}</Badge></Td>
+                  <Td label="Priority" className="hidden md:table-cell"><Badge tone={PRIORITY[w.priority]?.tone}>{PRIORITY[w.priority]?.label}</Badge></Td>
+                  <Td label="Assigned" className="hidden text-[13px] text-muted lg:table-cell">{[w.assigneeName, w.vendorName].filter(Boolean).join(" · ") || <span className="text-faint">Unassigned</span>}</Td>
+                  <Td label={view === "completed" ? "Submitted" : "Due"} className="hidden text-[13px] sm:table-cell">
                     {view === "completed" ? <span className="text-muted">{fmtDateTime(w.createdAt, tz)}</span>
                       : w.resolveDueAt ? <span className={w.overdue ? "font-medium text-danger" : "text-muted"} title={fmtDateTime(w.resolveDueAt, tz)}>{w.overdue ? `Overdue ${relative(w.resolveDueAt).replace(" ago", "")}` : relative(w.resolveDueAt)}</span> : "—"}
                   </Td>

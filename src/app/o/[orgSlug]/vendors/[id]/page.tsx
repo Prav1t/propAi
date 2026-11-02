@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getVendor, VENDOR_CATEGORIES } from "@/server/modules/vendors/service";
@@ -18,6 +20,7 @@ export default async function VendorPage({ params }: PageProps<"/o/[orgSlug]/ven
   const { orgSlug, id } = await params;
   const { ctx } = await getOrgContext(orgSlug);
   const d = await orNotFound(getVendor(ctx, id));
+  after(() => recordView(ctx, { type: "vendor", id, title: d.vendor.name, href: `/o/${orgSlug}/vendors/${id}` }).catch(() => {})); // command palette "recent"
   const v = d.vendor;
   const base = `/o/${orgSlug}`;
   const days = daysUntil(v.insuranceExpiresOn);

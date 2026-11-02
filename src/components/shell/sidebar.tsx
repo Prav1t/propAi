@@ -1,12 +1,25 @@
 "use client";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { useFocusTrap } from "@/lib/use-focus-trap";
 import { Logo } from "@/components/brand/logo";
 import { Icon } from "./icons";
 
 export type SidebarSection = { title?: string; items: { label: string; href: string; icon: string; badge?: number }[] };
+
+// pages render on the server per request; until the next one arrives, the clicked link shows it's on its way
+export function LinkPending({ className }: { className?: string }) {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return (
+    <span role="status" className={cn("inline-flex size-3.5 shrink-0 items-center justify-center", className)}>
+      <span aria-hidden className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent opacity-60 motion-reduce:animate-none" />
+      <span className="sr-only">Loading</span>
+    </span>
+  );
+}
 
 function NavLinks({ sections, onNavigate }: { sections: SidebarSection[]; onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -26,12 +39,13 @@ function NavLinks({ sections, onNavigate }: { sections: SidebarSection[]; onNavi
                   onClick={onNavigate}
                   aria-current={item.href === active ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 text-[13px] text-muted hover:bg-subtle hover:text-fg",
+                    "flex items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 text-[13px] text-muted hover:bg-subtle hover:text-fg pointer-coarse:py-2.5",
                     item.href === active && "bg-subtle font-medium text-fg",
                   )}
                 >
                   <Icon name={item.icon} />
                   <span className="flex-1">{item.label}</span>
+                  <LinkPending />
                   {item.badge ? <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold tabular-nums text-accent-fg" aria-label={`${item.badge} new`}>{item.badge > 99 ? "99+" : item.badge}</span> : null}
                 </Link>
               </li>
@@ -79,22 +93,19 @@ export function DesktopSidebar(props: Props) {
 // mobile: menu button + slide-over drawer
 export function MobileNav(props: Props) {
   const [open, setOpen] = useState(false); // links close the drawer via onNavigate
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
+  const panel = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useFocusTrap(panel, open, { onEscape: close });
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className="rounded-[var(--radius-md)] p-1.5 text-muted hover:bg-subtle lg:hidden" aria-label="Open navigation" aria-expanded={open}>
+      <button type="button" onClick={() => setOpen(true)} className="inline-flex size-11 items-center justify-center rounded-[var(--radius-md)] text-muted hover:bg-subtle lg:hidden" aria-label="Open navigation" aria-expanded={open}>
         <Icon name="menu" className="size-5" />
       </button>
       {open ? (
         <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
-          <div className="absolute inset-y-0 left-0 w-72 max-w-[85%] border-r border-border bg-surface shadow-xl">
-            <button type="button" onClick={() => setOpen(false)} className="absolute right-2 top-2 rounded p-1.5 text-muted hover:bg-subtle" aria-label="Close navigation">
+          <div className="absolute inset-0 bg-black/30" onClick={close} />
+          <div ref={panel} className="absolute inset-y-0 left-0 w-72 max-w-[85%] border-r border-border bg-surface shadow-xl">
+            <button type="button" onClick={close} className="absolute right-2 top-2 inline-flex size-11 items-center justify-center rounded text-muted hover:bg-subtle" aria-label="Close navigation">
               <Icon name="close" className="size-5" />
             </button>
             <Body {...props} onNavigate={() => setOpen(false)} />

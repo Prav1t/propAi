@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getResident } from "@/server/modules/people/service";
@@ -15,6 +17,7 @@ export default async function ResidentPage({ params }: PageProps<"/o/[orgSlug]/r
   const { orgSlug, id } = await params;
   const { ctx } = await getOrgContext(orgSlug);
   const d = await orNotFound(getResident(ctx, id));
+  after(() => recordView(ctx, { type: "resident", id, title: `${d.resident.firstName} ${d.resident.lastName}`, href: `/o/${orgSlug}/residents/${id}` }).catch(() => {})); // command palette "recent"
   const r = d.resident;
   const base = `/o/${orgSlug}`;
   const today = new Date().toISOString().slice(0, 10);

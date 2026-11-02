@@ -42,6 +42,11 @@ test("assistant actions: edit a prepared step, then cancel the plan — nothing 
   await card.getByLabel("Title").fill(title);
   await card.getByRole("button", { name: "Save changes" }).click();
   await expect(card.getByText(`Create work order “${title}”`)).toBeVisible();
+  // the card says what was changed against what the assistant prepared
+  const edits = card.getByTestId("plan-edits");
+  await expect(edits).toContainText("You changed");
+  await expect(edits.locator("del")).toHaveText("Broken lobby door");
+  await expect(edits.locator("ins")).toHaveText(title);
   await card.getByRole("button", { name: "Cancel plan" }).click();
   await expect(card.getByText("Cancelled", { exact: true })).toBeVisible();
   await expect(card.getByRole("button", { name: "Approve" })).toHaveCount(0);

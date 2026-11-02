@@ -11,4 +11,6 @@ export const TEST_ENV = {
   FILE_STORAGE_DIR: "/tmp/propai-test-uploads",
   // the SSO tests run a local OpenID Connect provider on http://127.0.0.1 (refused in production)
   OIDC_ALLOW_HTTP_ISSUERS: "true",
+  // the push tests deliver to a local receiver on http://127.0.0.1 (refused in production)
+  PUSH_ALLOW_PRIVATE_TARGETS: "true",
 } as const;

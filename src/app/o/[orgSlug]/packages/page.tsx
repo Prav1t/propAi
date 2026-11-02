@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listSavedViews } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { canManagePackages, canUsePackages, listPackages, OVERDUE_DAYS, packageStats, type PackageView } from "@/server/modules/packages/service";
 import { CARRIERS } from "@/server/modules/packages/carrier";
@@ -22,6 +23,7 @@ export default async function PackagesPage({ params, searchParams }: PageProps<"
   const { orgSlug } = await params;
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
+  const savedViews = await listSavedViews(ctx, "packages");
   if (!canUsePackages(principal)) notFound();
   const staff = canManagePackages(principal);
   const tz = principal.orgTimezone;
@@ -99,22 +101,22 @@ export default async function PackagesPage({ params, searchParams }: PageProps<"
       <div className="grid gap-6 xl:grid-cols-3">
         <Panel className="xl:col-span-2">
           <LinkTabs active={view} tabs={views.map((v) => ({ key: v.key, label: v.label, href: keep(v.key), count: v.key === view ? data.total : null }))} />
-          <FilterBar searchPlaceholder="Unit, name, tracking or pickup code…" filters={buildings.length > 1 ? [{ name: "building", label: "Building", options: buildings.map((b) => ({ value: b.id, label: `${b.propertyName} · ${b.name}` })) }] : []} />
+          <FilterBar saved={{ orgSlug, page: "packages", views: savedViews }} searchPlaceholder="Unit, name, tracking or pickup code…" filters={buildings.length > 1 ? [{ name: "building", label: "Building", options: buildings.map((b) => ({ value: b.id, label: `${b.propertyName} · ${b.name}` })) }] : []} />
           {data.rows.length === 0 ? <EmptyState title={view === "waiting" ? "Nothing waiting" : "No packages here"} /> : (
-            <Table>
+            <Table cards>
               <thead><tr>{releasable ? <Th className="w-8"><span className="sr-only">Select</span></Th> : null}<Th>Unit</Th><Th>Package</Th><Th className="hidden md:table-cell">Shelf</Th><Th>{releasable ? "Waiting" : "Status"}</Th></tr></thead>
               <tbody>
                 {data.rows.map((k) => (
                   <tr key={k.id} className="hover:bg-subtle/60">
-                    {releasable ? <Td><input type="checkbox" name="ids" value={k.id} form="release-form" aria-label={`Select package for unit ${k.unitNumber}`} className="size-4 accent-[var(--color-accent)]" /></Td> : null}
-                    <Td><span className="font-medium tabular-nums">{k.unitNumber}</span><div className="text-xs text-faint">{k.buildingName}</div></Td>
+                    {releasable ? <Td label="Select"><input type="checkbox" name="ids" value={k.id} form="release-form" aria-label={`Select package for unit ${k.unitNumber}`} className="size-4 accent-[var(--color-accent)]" /></Td> : null}
+                    <Td label="Unit"><span className="font-medium tabular-nums">{k.unitNumber}</span><div className="text-xs text-faint">{k.buildingName}</div></Td>
                     <Td>
                       <Link className="hover:underline" href={`${base}/${k.id}`}>{k.recipientName ?? "Resident"}</Link>
                       {k.perishable ? <Badge tone="danger" className="ml-2">Perishable</Badge> : null}
                       <div className="text-xs text-faint">{[k.carrier, PACKAGE_SIZE[k.size], k.trackingNumber ? `…${k.trackingNumber.slice(-6)}` : null, k.photos ? "photo" : null].filter(Boolean).join(" · ")}</div>
                     </Td>
-                    <Td className="hidden text-[13px] md:table-cell">{k.shelfLocation ?? "—"}</Td>
-                    <Td className="text-[13px]">{k.status === "waiting" ? <span title={fmtDateTime(k.receivedAt, tz)} className={k.receivedAt < overdueBefore ? "font-medium text-warning" : "text-muted"}>{relative(k.receivedAt).replace(" ago", "")}</span>
+                    <Td label="Shelf" className="hidden text-[13px] md:table-cell">{k.shelfLocation ?? "—"}</Td>
+                    <Td label={releasable ? "Waiting" : "Status"} className="text-[13px]">{k.status === "waiting" ? <span title={fmtDateTime(k.receivedAt, tz)} className={k.receivedAt < overdueBefore ? "font-medium text-warning" : "text-muted"}>{relative(k.receivedAt).replace(" ago", "")}</span>
                       : <><Badge tone={PACKAGE_STATUS[k.status]?.tone}>{PACKAGE_STATUS[k.status]?.label}</Badge>{k.pickedUpByName ? <span className="block text-xs text-faint">{k.pickedUpByName}</span> : null}</>}</Td>
                   </tr>
                 ))}

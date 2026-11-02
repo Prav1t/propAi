@@ -38,3 +38,11 @@ export async function verifyDomainAction(slug: string, id: string, _: ActionStat
 export async function removeDomainAction(slug: string, id: string, _: ActionState, fd: FormData) {
   return runOrgForm({ orgSlug: slug, fd, schema: none, allowReadOnly: true, recentAuth: true, run: (ctx) => removeDomain(ctx, id), done: () => ({ message: "Domain removed.", revalidate: [page(slug)] }) });
 }
+
+export async function signOutMemberAction(slug: string, membershipId: string, _: ActionState, fd: FormData) {
+  const { signOutMember } = await import("@/server/modules/members/sessions");
+  return runOrgForm({
+    orgSlug: slug, fd, schema: none, allowReadOnly: true, recentAuth: true, run: (ctx) => signOutMember(ctx, membershipId),
+    done: (r) => ({ message: r.kept ? `Ended ${r.ended} session${r.ended === 1 ? "" : "s"}. ${r.kept} started outside your single sign-on stay: they also use other organizations.` : `Signed out of ${r.ended} device${r.ended === 1 ? "" : "s"}.`, revalidate: [page(slug)] }),
+  });
+}

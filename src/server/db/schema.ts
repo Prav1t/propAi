@@ -625,6 +625,7 @@ export const workOrders = pgTable(
     triageRuleId: uuid("triage_rule_id").references(() => triageRules.id, { onDelete: "set null" }),
     sourceType: text("source_type"), // inspection | incident | complaint | booking | pm_schedule
     sourceId: uuid("source_id"),
+    clientRef: text("client_ref"), // set by the offline draft queue: sending the same draft twice creates one request
     assetId: uuid("asset_id").references((): AnyPgColumn => assets.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -638,6 +639,7 @@ export const workOrders = pgTable(
     index("work_orders_assignee_idx").on(t.assignedMembershipId),
     index("work_orders_submitter_idx").on(t.submittedByUserId),
     index("work_orders_unit_idx").on(t.unitId),
+    uniqueIndex("work_orders_client_ref_uq").on(t.orgId, t.submittedByUserId, t.clientRef).where(sql`${t.clientRef} is not null`),
     check("wo_status_ck", sql`${t.status} in ('new','acknowledged','assigned','scheduled','in_progress','awaiting_vendor','awaiting_resident','completed','closed','cancelled')`),
     check("wo_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
     check("wo_source_ck", sql`${t.source} in ('resident','staff','inspection','incident','complaint','system','api')`),
@@ -904,6 +906,7 @@ export const notificationPreferences = pgTable(
     kind: text("kind").notNull(),
     email: boolean("email").notNull(),
     inApp: boolean("in_app").notNull().default(true),
+    push: boolean("push").notNull().default(true), // only matters on devices that subscribed (Iteration 12)
   },
   (t) => [uniqueIndex("notification_prefs_uq").on(t.orgId, t.userId, t.kind)],
 );
@@ -2347,7 +2350,7 @@ export const consents = pgTable(
     orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
     userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     residentId: uuid("resident_id").references(() => residents.id, { onDelete: "cascade" }),
-    channel: text("channel").notNull(), // email | sms
+    channel: text("channel").notNull(), // email | sms | push
     purpose: text("purpose").notNull().default("notifications"),
     granted: boolean("granted").notNull(),
     source: text("source").notNull(), // preferences | admin | signup
@@ -2357,7 +2360,69 @@ export const consents = pgTable(
   },
   (t) => [
     index("consents_subject_idx").on(t.orgId, t.userId, t.channel, t.createdAt),
-    check("consents_channel_ck", sql`${t.channel} in ('email','sms')`),
+    check("consents_channel_ck", sql`${t.channel} in ('email','sms','push')`),
     check("consents_subject_ck", sql`${t.userId} is not null or ${t.residentId} is not null`),
+  ],
+);
+
+/* ───── Iteration 12: saved views, recently viewed, web push ───── */
+
+// a person's saved list filters (owner-only)
+export const savedViews = pgTable(
+  "saved_views",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    page: text("page").notNull(), // maintenance | tasks | …
+    name: text("name").notNull(),
+    query: text("query").notNull(), // sanitized URL search string
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("saved_views_name_uq").on(t.orgId, t.userId, t.page, t.name),
+    check("saved_views_name_ck", sql`length(${t.name}) between 1 and 60`),
+    check("saved_views_query_ck", sql`length(${t.query}) <= 1000`),
+  ],
+);
+
+// records a person opened recently, for the command palette (owner-only; trimmed to the latest 20)
+export const recentViews = pgTable(
+  "recent_views",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    title: text("title").notNull(),
+    href: text("href").notNull(),
+    viewedAt: timestamp("viewed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("recent_views_entity_uq").on(t.orgId, t.userId, t.entityType, t.entityId),
+    index("recent_views_user_idx").on(t.orgId, t.userId, t.viewedAt),
+  ],
+);
+
+// a browser that agreed to push notifications for one person in one organization
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: createdAt(),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    failures: integer("failures").notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex("push_subscriptions_endpoint_uq").on(t.orgId, t.endpoint),
+    index("push_subscriptions_user_idx").on(t.orgId, t.userId),
+    check("push_subscriptions_endpoint_ck", sql`${t.endpoint} like 'https://%' or ${t.endpoint} like 'http://127.0.0.1:%'`),
   ],
 );

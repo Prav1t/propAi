@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { getVisitor } from "@/server/modules/visitors/service";
@@ -20,6 +22,7 @@ export default async function VisitorPage({ params, searchParams }: PageProps<"/
   const q = await searchParams;
   const { ctx } = await getOrgContext(orgSlug);
   const d = await orNotFound(getVisitor(ctx, id));
+  after(() => recordView(ctx, { type: "visitor", id, title: d.visitor.name, href: `/o/${orgSlug}/visitors/${id}` }).catch(() => {})); // command palette "recent"
   const v = d.visitor;
   const tz = d.labels.tz;
   const staff = d.access.manage;

@@ -1,14 +1,16 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getTask } from "@/server/modules/tasks/service";
 import { Badge, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { Breadcrumbs, DetailList } from "@/components/ui/nav-bits";
 import { SchemaForm } from "@/components/ui/schema-form";
-import { ActionButton } from "@/components/ops/action-button";
 import { Timeline } from "@/components/ops/timeline";
 import { PRIORITY, TASK_STATUS } from "@/lib/ops-labels";
 import { fmtDateTime } from "@/lib/time";
-import { assignTaskAction, commentTaskAction, setTaskStatusAction, toggleChecklistAction } from "../../ops-actions";
+import { assignTaskAction, commentTaskAction, setTaskStatusAction, setChecklistItemAction } from "../../ops-actions";
+import { Checklist } from "@/components/ops/checklist";
 
 export const metadata = { title: "Task" };
 
@@ -18,6 +20,7 @@ export default async function TaskPage({ params }: PageProps<"/o/[orgSlug]/tasks
   const { orgSlug, id } = await params;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getTask(ctx, id));
+  after(() => recordView(ctx, { type: "task", id, title: d.task.title, href: `/o/${orgSlug}/tasks/${id}` }).catch(() => {})); // command palette "recent"
   const t = d.task;
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;
@@ -41,15 +44,7 @@ export default async function TaskPage({ params }: PageProps<"/o/[orgSlug]/tasks
           </Panel>
           {d.checklist.length ? (
             <Panel>
-              <PanelHeader title="Checklist" description={`${d.checklist.filter((c) => c.done).length} of ${d.checklist.length} done`} />
-              <ul className="divide-y divide-border">
-                {d.checklist.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
-                    <span className={c.done ? "text-muted line-through" : ""}>{c.label}</span>
-                    {d.access.work && open ? <ActionButton action={toggleChecklistAction.bind(null, orgSlug, c.id, !c.done)} label={c.done ? "Undo" : "Done"} variant={c.done ? "ghost" : "secondary"} /> : null}
-                  </li>
-                ))}
-              </ul>
+              <Checklist items={d.checklist.map((c) => ({ id: c.id, label: c.label, done: c.done }))} canWork={d.access.work && open} toggle={setChecklistItemAction.bind(null, orgSlug)} />
             </Panel>
           ) : null}
           <Panel>

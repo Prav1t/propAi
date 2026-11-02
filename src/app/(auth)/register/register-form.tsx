@@ -16,7 +16,7 @@ export function RegisterForm({ devMailbox }: { devMailbox: boolean }) {
         </FormAlert>
         {devMailbox ? (
           <p className="text-[13px] text-muted">
-            Development: emails are captured in the <Link className="text-accent hover:underline" href="/dev/mailbox">dev mailbox</Link>.
+            Development: emails are captured in the <Link className="text-accent underline underline-offset-2" href="/dev/mailbox">dev mailbox</Link>.
           </p>
         ) : null}
         <Link href="/login" className="block text-center text-[13px] text-accent hover:underline">Go to sign in</Link>

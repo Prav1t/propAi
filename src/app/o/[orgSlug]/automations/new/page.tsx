@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getOrgContext, sp } from "@/server/org-context";
 import { builderOptions, canManageAutomations } from "@/server/automation/service";
+import { Breadcrumbs } from "@/components/ui/nav-bits";
 import { PageHeader } from "@/components/ui/primitives";
 import { RuleBuilder } from "@/components/automation/rule-builder";
 import { TEMPLATES } from "@/lib/automation-templates";
@@ -24,7 +24,8 @@ export default async function NewRulePage({ params, searchParams }: PageProps<"/
   };
   return (
     <>
-      <PageHeader title={tpl ? `New rule: ${tpl.title}` : "New rule"} description={<><Link href={`/o/${orgSlug}/automations`} className="text-accent hover:underline">Automations</Link>{tpl ? ` · ${tpl.about}` : " · Choose what starts it, when it applies, and what it does."}</>} />
+      <Breadcrumbs items={[{ label: "Automations", href: `/o/${orgSlug}/automations` }, { label: "New rule" }]} />
+      <PageHeader title={tpl ? `New rule: ${tpl.title}` : "New rule"} description={tpl ? tpl.about : "Choose what starts it, when it applies, and what it does."} />
       <RuleBuilder orgSlug={orgSlug} action={saveRuleAction.bind(null, orgSlug, null)} initial={initial} initialEnabled={false} options={options} dryRun={dryRunAction} candidates={candidateEventsAction} />
     </>
   );

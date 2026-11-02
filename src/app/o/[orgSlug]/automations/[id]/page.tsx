@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { canManageAutomations, getRule } from "@/server/automation/service";
+import { Breadcrumbs } from "@/components/ui/nav-bits";
+import { FlowView } from "@/components/automation/flow-view";
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Table, Td, Th } from "@/components/ui/primitives";
 import { LinkButton } from "@/components/ui/button";
 import { ConfirmAction } from "@/components/ui/confirm-action";
@@ -23,9 +25,10 @@ export default async function RulePage({ params, searchParams }: PageProps<"/o/[
   const tz = principal.orgTimezone;
   return (
     <>
+      <Breadcrumbs items={[{ label: "Automations", href: base }, { label: r.wf.name }]} />
       <PageHeader
         title={r.wf.name}
-        description={<><Link href={base} className="text-accent hover:underline">Automations</Link> · version {r.wf.version} · {r.wf.propertyId ? r.names.properties?.[r.wf.propertyId] : "every property"}</>}
+        description={`Version ${r.wf.version} · ${r.wf.propertyId ? r.names.properties?.[r.wf.propertyId] : "every property"}`}
         actions={r.editable ? <div className="flex flex-wrap gap-2">
           <LinkButton href={`${base}/${id}/edit`} variant="secondary" size="sm">Edit</LinkButton>
           {r.wf.enabled ? <ConfirmAction action={setRuleEnabledAction.bind(null, orgSlug, id, false)} label="Turn off" confirmLabel="Turn off" variant="secondary" description="It stops reacting to new events. Runs waiting for approval stay open." />
@@ -38,16 +41,8 @@ export default async function RulePage({ params, searchParams }: PageProps<"/o/[
       <div className="grid gap-6 lg:grid-cols-3">
         <Panel className="lg:col-span-2">
           <PanelHeader title="What it does" actions={r.wf.pausedReason ? <Badge tone="danger">Paused</Badge> : r.wf.enabled ? <Badge tone="success">On</Badge> : <Badge>Off</Badge>} />
-          {r.summary ? (
-            <div className="space-y-3 px-4 py-3 text-sm">
-              <p><span className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-faint">When</span>{r.summary.when}</p>
-              {r.summary.conditions.length ? <div><span className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-faint">If</span>{r.summary.conditions.join(", and ")}</div> : null}
-              <div>
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">Then</span>
-                <ol className="mt-1 list-decimal space-y-1 pl-5">{r.summary.actions.map((a, i) => <li key={i}>{a}</li>)}</ol>
-              </div>
-            </div>
-          ) : <EmptyState title="This rule can't be read">Edit it and save it again.</EmptyState>}
+          {r.summary ? <FlowView when={r.summary.when} conditions={r.summary.conditions} steps={r.summary.steps} />
+            : <EmptyState title="This rule can't be read">Edit it and save it again.</EmptyState>}
         </Panel>
         <Panel>
           <PanelHeader title="Details" />

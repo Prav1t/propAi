@@ -131,6 +131,19 @@ describe("visitors and guest passes", () => {
     await checkInVisitor(concierge, second.visitor.id, checkInSchema.parse({ spaceId: space.id }));
   });
 
+  it("a guest who arrives after their visit window still gets a page, free spaces and two hours of parking", async () => {
+    // found by the Iteration 12 audit: the free-space lookup built an invalid time range once the window had passed
+    const r = await registerVisitor(emma, visitorSchema.parse({ name: "Late Driver", ...win(0.25, 1), plate: plate() }));
+    await ownerPool.query("update visitors set expected_from = now() - interval '3 hours', expected_until = now() - interval '1 hour' where id = $1", [r.visitor.id]);
+    const d = await getVisitor(concierge, r.visitor.id);
+    expect(d.freeSpaces.length).toBeGreaterThan(0);
+    const c = await checkInVisitor(concierge, r.visitor.id, checkInSchema.parse({ spaceId: d.freeSpaces[0].id, override: "on", note: "Arrived late" }));
+    expect(c.parking?.spaceCode).toBe(d.freeSpaces[0].code);
+    const [permit] = (await ownerPool.query("select valid_from, valid_until from parking_permits where visitor_id = $1", [r.visitor.id])).rows;
+    expect(new Date(permit.valid_until).getTime() - new Date(permit.valid_from).getTime()).toBe(2 * H);
+    await checkOutVisitor(concierge, r.visitor.id);
+  });
+
   it("a new pass link replaces the old one; cancelled passes stop working", async () => {
     const r = await registerVisitor(emma, visitorSchema.parse({ name: "Reissue Guest", ...win(3, 2) }));
     const again = await regeneratePass(emma, r.visitor.id);

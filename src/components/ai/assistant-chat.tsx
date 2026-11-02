@@ -10,6 +10,8 @@ import { Icon } from "@/components/shell/icons";
 import { cn } from "@/lib/cn";
 import { MarkdownView } from "./markdown-view";
 import { PlanCard, type PlanUi } from "./plan-card";
+import { VoiceInput } from "./voice-input";
+import { followUps } from "@/lib/assistant-followups";
 
 export type StepUi = { callId: string; tool: string; title: string; state: "running" | "done"; outcome?: string; summary?: string | null; display?: ToolDisplay | null };
 export type TurnUi = {
@@ -121,6 +123,8 @@ export function AssistantChat(props: {
   demo: { on: boolean; reason: string | null };
   autoAsk?: string | null;
   resident: boolean;
+  tabBar?: boolean; // a phone tab bar sits under the input
+  voice?: { transcribeUrl: string | null } | null; // dictation (null when switched off)
   headerActions?: ReactNode;
 }) {
   const router = useRouter();
@@ -147,6 +151,7 @@ export function AssistantChat(props: {
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const dictationBase = useRef<string | null>(null);
   const asked = useRef(false);
   const current = props.modes.find((m) => m.key === mode) ?? props.modes[0];
 
@@ -244,7 +249,23 @@ export function AssistantChat(props: {
     }
   }, [props.autoAsk, send]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || t?.closest("input, textarea, select, [contenteditable=true]")) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const empty = turns.length === 0;
+  // next questions after the latest answer, from what it looked up (never while a plan waits for a decision)
+  const last = turns.at(-1);
+  const suggestions = !busy && last && last.state === "done" && !(last.plan && last.plan.status === "pending")
+    ? followUps({ tools: last.steps.map((s) => s.tool), asked: turns.map((t) => t.question), resident: props.resident, starters: current?.suggestions ?? [] })
+    : [];
   return (
     <div className="flex min-h-[calc(100dvh-10rem)] flex-col">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -275,12 +296,19 @@ export function AssistantChat(props: {
           <TurnView key={t.key} t={t} assistantName={props.assistantName} orgSlug={props.orgSlug}
             onPlanChange={(plan) => setTurns((ts) => ts.map((x) => (x.key === t.key ? { ...x, plan } : x)))} />
         ))}
+        {suggestions.length ? (
+          <div className="flex flex-wrap gap-2 pl-1" aria-label="Suggested follow-ups" role="group">
+            {suggestions.map((s) => (
+              <button key={s} type="button" onClick={() => void send(s)} className="rounded-full border border-border bg-surface px-3 py-1.5 text-[13px] text-muted hover:bg-subtle hover:text-fg pointer-coarse:py-2.5">{s}</button>
+            ))}
+          </div>
+        ) : null}
         <div ref={endRef} />
       </div>
 
       <form
         onSubmit={(e) => { e.preventDefault(); void send(input); }}
-        className={cn("sticky z-[5] -mx-1 bg-bg/95 px-1 pb-2 pt-2 backdrop-blur", props.resident ? "bottom-20 lg:bottom-0" : "bottom-0")}
+        className={cn("sticky z-[5] -mx-1 bg-bg/95 px-1 pb-2 pt-2 backdrop-blur", props.tabBar ? "bottom-[calc(3.5rem+env(safe-area-inset-bottom))] lg:bottom-0" : "bottom-0")}
       >
         {!props.conversationId && empty && props.modes.length > 1 ? (
           <div role="radiogroup" aria-label="Assistant mode" className="mb-2 flex flex-wrap gap-1">
@@ -292,22 +320,26 @@ export function AssistantChat(props: {
             ))}
           </div>
         ) : null}
-        <div className="flex items-end gap-2 rounded-xl border border-border-strong bg-surface p-1.5 focus-within:ring-2 focus-within:ring-accent/40">
+        <div className="relative flex items-end gap-2 rounded-xl border border-border-strong bg-surface p-1.5 focus-within:ring-2 focus-within:ring-accent/40">
           <label htmlFor="assistant-input" className="sr-only">Ask {props.assistantName}</label>
           <textarea
             id="assistant-input" ref={inputRef} rows={1} value={input} maxLength={4000}
-            onChange={(e) => { setInput(e.target.value); e.currentTarget.style.height = "auto"; e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 160)}px`; }}
+            onChange={(e) => { dictationBase.current = null; setInput(e.target.value); e.currentTarget.style.height = "auto"; e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 160)}px`; }}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(input); } }}
             placeholder={props.resident ? "Ask about your home…" : "Ask about your buildings…"}
             className="max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-faint focus-visible:outline-none"
           />
+          {props.voice ? (
+            <VoiceInput transcribeUrl={props.voice.transcribeUrl} disabled={busy} onStart={() => { dictationBase.current = null; }}
+              onText={(text) => { setInput((cur) => { const base = dictationBase.current ?? cur; dictationBase.current = base; return base ? `${base} ${text}` : text; }); inputRef.current?.focus(); }} />
+          ) : null}
           {busy ? (
             <Button type="button" variant="secondary" size="sm" onClick={() => abortRef.current?.abort()} aria-label="Stop answering"><Icon name="stop" /></Button>
           ) : (
             <Button type="submit" size="sm" disabled={!input.trim()} aria-label="Send"><Icon name="send" /></Button>
           )}
         </div>
-        <p className="mt-1.5 px-1 text-[11px] text-faint">Answers come only from records you can access. Changes happen only after you approve them.</p>
+        <p className="mt-1.5 px-1 text-[11px] text-faint">Answers come only from records you can access. Changes happen only after you approve them.<span className="hidden sm:inline"> Press <kbd className="rounded border border-border px-1 font-sans">/</kbd> to type a question.</span></p>
       </form>
     </div>
   );

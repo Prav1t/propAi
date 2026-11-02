@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { relative, utcToZonedInput, zonedToUtc } from "./time";
+import { fmtDay, relative, utcToZonedInput, zonedToUtc } from "./time";
 
 describe("time zones", () => {
   it("converts Vancouver wall time to UTC across DST", () => {
@@ -17,5 +17,17 @@ describe("time zones", () => {
     const now = new Date("2026-01-01T00:00:00Z");
     expect(relative(new Date("2026-01-01T03:00:00Z"), now)).toBe("in 3h");
     expect(relative(new Date("2025-12-30T00:00:00Z"), now)).toBe("2d ago");
+  });
+});
+
+describe("fmtDay", () => {
+  const now = new Date("2026-10-25T12:00:00Z");
+  it("shows calendar dates without shifting them across time zones", () => {
+    expect(fmtDay("2026-11-03", now)).toBe("Nov 3");
+    expect(fmtDay("2026-01-01", now)).toBe("Jan 1");
+  });
+  it("adds the year outside the current one and passes anything unparseable through", () => {
+    expect(fmtDay("2027-02-14", now)).toBe("Feb 14, 2027");
+    expect(fmtDay("soon", now)).toBe("soon");
   });
 });

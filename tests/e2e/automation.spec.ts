@@ -15,6 +15,12 @@ test("automation: an admin builds a rule from a template, a resident's emergency
   await expect(page.getByRole("heading", { name: "New rule: Elevator emergencies" })).toBeVisible();
   await page.getByLabel("Name").fill(ruleName);
   await page.getByLabel("Property", { exact: true }).selectOption({ label: "Fraser Towers" });
+  // the builder shows the rule as a flow, and as a sentence on request
+  const flow = page.getByTestId("rule-flow");
+  await expect(flow).toContainText("Fraser Towers");
+  await expect(flow).toContainText("marked emergency");
+  await expect(flow.getByText("Pause for approval")).toBeVisible();
+  await page.getByRole("button", { name: "Show as a sentence" }).click();
   await expect(page.getByText("When a maintenance request is created at Fraser Towers, if it's marked emergency and category is Elevator:")).toBeVisible();
   await page.getByRole("button", { name: "Run test" }).click();
   await expect(page.getByText(/^(This would have|It wouldn't run)/)).toBeVisible({ timeout: 15_000 });

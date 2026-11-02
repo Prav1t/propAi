@@ -227,7 +227,8 @@ describe("provider events", () => {
 describe("usage metering", () => {
   it("records today's levels for every organization", async () => {
     await snapshotUsage();
-    const rows = await q(`select metric, quantity from usage_records u join organizations o on o.id = u.org_id where o.slug = 'pacific-properties' and day = current_date`);
+    // usage days are UTC days (the database session's own date differs in the evening west of UTC)
+    const rows = await q(`select metric, quantity from usage_records u join organizations o on o.id = u.org_id where o.slug = 'pacific-properties' and day = (now() at time zone 'utc')::date`);
     const m = Object.fromEntries(rows.map((r) => [r.metric, r.quantity]));
     const units = (await q("select count(*)::int n from units u join organizations o on o.id = u.org_id where o.slug = 'pacific-properties'"))[0].n;
     expect(m.units).toBe(units);

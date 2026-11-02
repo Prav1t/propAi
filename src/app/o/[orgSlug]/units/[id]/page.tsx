@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getUnit } from "@/server/modules/portfolio/service";
@@ -16,6 +18,7 @@ export default async function UnitPage({ params }: PageProps<"/o/[orgSlug]/units
   const { orgSlug, id } = await params;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getUnit(ctx, id));
+  after(() => recordView(ctx, { type: "unit", id, title: `Unit ${d.unit.number}`, href: `/o/${orgSlug}/units/${id}` }).catch(() => {})); // command palette "recent"
   const u = d.unit;
   const base = `/o/${orgSlug}`;
   const today = new Date().toISOString().slice(0, 10);

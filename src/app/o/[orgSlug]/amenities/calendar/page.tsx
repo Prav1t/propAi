@@ -97,7 +97,7 @@ export default async function CalendarPage({ params, searchParams }: PageProps<"
                       {its.map((it) => (
                         <li key={it.key} className="flex flex-wrap gap-x-3 text-[13px]">
                           <span className="w-44 shrink-0 whitespace-nowrap tabular-nums text-muted">{fmtT(it.start)}–{fmtT(it.end)}</span>
-                          {it.href ? <Link className="hover:underline" href={it.href}>{it.title}</Link> : <span>{it.title}</span>}
+                          {it.href ? <Link className="inline-flex min-h-6 items-center hover:underline" href={it.href}>{it.title}</Link> : <span>{it.title}</span>}
                           <span className="text-faint">{it.sub}{it.pending ? " · awaiting approval" : ""}</span>
                         </li>
                       ))}

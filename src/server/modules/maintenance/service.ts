@@ -7,7 +7,7 @@ import {
 } from "../../db/schema";
 import { authorize, can, ForbiddenError, NotFoundError, type Principal } from "../../authz/authorize";
 import type { Tx } from "../../db/client";
-import { auditAs, blankToNull, tenantTx, ValidationError, type TenantCtx } from "../context";
+import { auditAs, blankToNull, tenantTx, uniqueViolation, ValidationError, type TenantCtx } from "../context";
 import { pageArgs, scopeCondition, toPage, type Page } from "../scope";
 import { addTimeline, emit, listTimeline, nextNumber, type Visibility } from "../ops/core";
 import { closeDowntimeForWorkOrderTx, openDowntimeTx } from "../assets/service";
@@ -297,11 +297,36 @@ async function resolveLocation(tx: Tx, p: Principal, input: CreateWoInput) {
   throw new ValidationError("Choose where the problem is.", "buildingId");
 }
 
-export type CreateWoResult = { workOrder: WoRow; instructions: string[]; matchedRules: string[] };
+export type CreateWoResult = { workOrder: WoRow; instructions: string[]; matchedRules: string[]; duplicate?: boolean };
 
-export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts: { source?: WoRow["source"]; sourceType?: string; sourceId?: string } = {}): Promise<CreateWoResult> {
+// `clientRef` comes from the offline draft queue (Iteration 12): a draft sent twice (a retry after a dropped
+// connection, two tabs coming back online) creates one request; the second send gets the first one back
+export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts: { source?: WoRow["source"]; sourceType?: string; sourceId?: string; clientRef?: string | null } = {}): Promise<CreateWoResult> {
   const p = ctx.principal;
   if (!p.permissions.has("workorder.create")) throw new ForbiddenError();
+  const clientRef = opts.clientRef ?? null;
+  if (clientRef !== null && !/^[A-Za-z0-9_-]{8,64}$/.test(clientRef)) throw new ValidationError("Invalid draft reference.");
+  const already = () => tenantTx(ctx, async (tx) => {
+    const [wo] = await tx.select().from(workOrders).where(and(eq(workOrders.orgId, p.orgId), eq(workOrders.submittedByUserId, p.userId), eq(workOrders.clientRef, clientRef!)));
+    return wo ? { workOrder: wo, instructions: [], matchedRules: [], duplicate: true } : null;
+  });
+  if (clientRef) {
+    const prior = await already();
+    if (prior) return prior;
+  }
+  try {
+    return await createWorkOrderTx(ctx, input, opts, clientRef);
+  } catch (e) {
+    if (clientRef && uniqueViolation(e) === "work_orders_client_ref_uq") {
+      const prior = await already();
+      if (prior) return prior;
+    }
+    throw e;
+  }
+}
+
+async function createWorkOrderTx(ctx: TenantCtx, input: CreateWoInput, opts: { source?: WoRow["source"]; sourceType?: string; sourceId?: string }, clientRef: string | null): Promise<CreateWoResult> {
+  const p = ctx.principal;
   const isResident = p.role.category === "resident";
   return tenantTx(ctx, async (tx) => {
     // equipment: staff only; with no other location given, the asset's own location is used
@@ -346,7 +371,7 @@ export async function createWorkOrder(ctx: TenantCtx, input: CreateWoInput, opts
       permissionToEnter: input.permissionToEnter, entryNotes: input.entryNotes,
       respondDueAt: due.respondDueAt, resolveDueAt: due.resolveDueAt,
       triageRuleId: triage.matched[0]?.id ?? null, sourceType: opts.sourceType ?? null, sourceId: opts.sourceId ?? null,
-      assetId: asset?.id ?? null,
+      assetId: asset?.id ?? null, clientRef,
     }).returning();
     await addTimeline(tx, ctx, { entityType: "work_order", entityId: wo.id, kind: "created", toStatus: "new", visibility: "public",
       body: ctx.ai ? `Request #${number} submitted with ${BRAND.assistantName}.` : `Request #${number} submitted.` });
