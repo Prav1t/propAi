@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getRun } from "@/server/automation/service";
+import { Breadcrumbs } from "@/components/ui/nav-bits";
 import { Badge, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { FormAlert } from "@/components/ui/form";
 import { DecideForm } from "@/components/automation/decide-form";
@@ -29,9 +30,10 @@ export default async function RunPage({ params, searchParams }: PageProps<"/o/[o
   const st = RUN_STATUS[r.run.status];
   return (
     <>
+      <Breadcrumbs items={[{ label: "Automations", href: `${base}/automations` }, ...(r.canOpenRule ? [{ label: r.workflow.name, href: `${base}/automations/${r.workflow.id}` }] : []), { label: "Run" }]} />
       <PageHeader
         title={r.workflow.name}
-        description={<>{r.canOpenRule ? <Link href={`${base}/automations/${r.workflow.id}`} className="text-accent hover:underline">Rule</Link> : "Automation run"} · {TRIGGERS[r.run.triggerType as TriggerType]?.label ?? r.run.triggerType} · {fmtDateTime(r.run.createdAt, tz)}{r.propertyName ? ` · ${r.propertyName}` : ""}</>}
+        description={`Automation run · ${TRIGGERS[r.run.triggerType as TriggerType]?.label ?? r.run.triggerType} · ${fmtDateTime(r.run.createdAt, tz)}${r.propertyName ? ` · ${r.propertyName}` : ""}`}
         actions={<Badge tone={st?.tone}>{st?.label ?? r.run.status}</Badge>}
       />
       {typeof decided === "string" && DECIDED[decided] && !r.canDecide ? <div className="mb-4"><FormAlert kind="success">{DECIDED[decided]}</FormAlert></div> : null}

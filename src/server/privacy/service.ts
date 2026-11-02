@@ -1,11 +1,12 @@
 import "server-only";
+import { forgetRecent } from "@/server/modules/views/service";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, ilike, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, withContext, type Tx } from "../db/client";
 import {
   aiConversations, aiMessages, auditLogs, bookings, complaints, consents, files, legalHolds, memberships, messages, messageThreads,
-  notificationPreferences, notifications, packages, parkingPermits, parkingViolations, privacyRequests, residents, retentionPolicies,
+  notificationPreferences, notifications, packages, pushSubscriptions, recentViews, savedViews, parkingPermits, parkingViolations, privacyRequests, residents, retentionPolicies,
   roles, sessions, unitOccupancies, units, users, vehicles, visitors, workOrders,
 } from "../db/schema";
 import { authorize, NotFoundError } from "../authz/authorize";
@@ -82,9 +83,12 @@ export async function exportPerson(ctx: TenantCtx, residentId: string): Promise<
           messages: await stx.select({ role: aiMessages.role, content: aiMessages.content, createdAt: aiMessages.createdAt }).from(aiMessages).where(and(eq(aiMessages.conversationId, c.id), inArray(aiMessages.role, ["user", "assistant"]))).orderBy(aiMessages.seq),
         }))),
         notifications: await stx.select({ title: notifications.title, body: notifications.body, createdAt: notifications.createdAt, readAt: notifications.readAt }).from(notifications).where(and(eq(notifications.orgId, orgId), eq(notifications.userId, uid))),
-        notificationPreferences: await stx.select({ kind: notificationPreferences.kind, email: notificationPreferences.email, inApp: notificationPreferences.inApp }).from(notificationPreferences).where(and(eq(notificationPreferences.orgId, orgId), eq(notificationPreferences.userId, uid))),
+        notificationPreferences: await stx.select({ kind: notificationPreferences.kind, email: notificationPreferences.email, inApp: notificationPreferences.inApp, push: notificationPreferences.push }).from(notificationPreferences).where(and(eq(notificationPreferences.orgId, orgId), eq(notificationPreferences.userId, uid))),
+        savedViews: await stx.select({ page: savedViews.page, name: savedViews.name, filters: savedViews.query, createdAt: savedViews.createdAt }).from(savedViews).where(and(eq(savedViews.orgId, orgId), eq(savedViews.userId, uid))),
+        recentlyViewed: await stx.select({ type: recentViews.entityType, title: recentViews.title, viewedAt: recentViews.viewedAt }).from(recentViews).where(and(eq(recentViews.orgId, orgId), eq(recentViews.userId, uid))).orderBy(desc(recentViews.viewedAt)),
+        pushDevices: await stx.select({ device: pushSubscriptions.userAgent, createdAt: pushSubscriptions.createdAt, lastSuccessAt: pushSubscriptions.lastSuccessAt }).from(pushSubscriptions).where(and(eq(pushSubscriptions.orgId, orgId), eq(pushSubscriptions.userId, uid))),
       };
-    }) : { assistantConversations: [], notifications: [], notificationPreferences: [] };
+    }) : { assistantConversations: [], notifications: [], notificationPreferences: [], savedViews: [], recentlyViewed: [], pushDevices: [] };
     const profile = r;
     return {
       generatedAt: new Date().toISOString(),
@@ -112,6 +116,9 @@ export async function exportPerson(ctx: TenantCtx, residentId: string): Promise<
       }))),
       notifications: personal.notifications,
       notificationPreferences: personal.notificationPreferences,
+      savedViews: personal.savedViews,
+      recentlyViewed: personal.recentlyViewed,
+      pushDevices: personal.pushDevices,
       consents: await tx.select({ channel: consents.channel, purpose: consents.purpose, granted: consents.granted, source: consents.source, createdAt: consents.createdAt }).from(consents)
         .where(and(eq(consents.orgId, orgId), or(eq(consents.residentId, residentId), uid ? eq(consents.userId, uid) : sql`false`))).orderBy(consents.createdAt),
       assistantConversations: personal.assistantConversations,
@@ -186,12 +193,17 @@ export async function erasePerson(ctx: TenantCtx, residentId: string, input: { r
       result.assistantConversations = n(await tx.delete(aiConversations).where(and(eq(aiConversations.orgId, orgId), eq(aiConversations.userId, uid))).returning({ id: aiConversations.id }));
       result.notifications = n(await tx.delete(notifications).where(and(eq(notifications.orgId, orgId), eq(notifications.userId, uid))).returning({ id: notifications.id }));
       await tx.delete(notificationPreferences).where(and(eq(notificationPreferences.orgId, orgId), eq(notificationPreferences.userId, uid)));
+      result.savedViews = n(await tx.delete(savedViews).where(and(eq(savedViews.orgId, orgId), eq(savedViews.userId, uid))).returning({ id: savedViews.id }));
+      result.recentlyViewed = n(await tx.delete(recentViews).where(and(eq(recentViews.orgId, orgId), eq(recentViews.userId, uid))).returning({ id: recentViews.id }));
+      result.pushDevices = n(await tx.delete(pushSubscriptions).where(and(eq(pushSubscriptions.orgId, orgId), eq(pushSubscriptions.userId, uid))).returning({ id: pushSubscriptions.id }));
       // their resident access here ends; staff or admin memberships the same person may hold aren't touched
       result.memberships = n(await tx.update(memberships).set({ status: "deactivated" }).where(and(
         eq(memberships.orgId, orgId), eq(memberships.userId, uid),
         inArray(memberships.roleId, tx.select({ id: roles.id }).from(roles).where(eq(roles.category, "resident"))),
       )).returning({ id: memberships.id }));
     }
+    // staff who opened this person's record no longer see their name in "recent"
+    await forgetRecent(tx, orgId, "resident", residentId);
     result.consents = n(await tx.delete(consents).where(and(eq(consents.orgId, orgId), or(eq(consents.residentId, residentId), uid ? eq(consents.userId, uid) : sql`false`))).returning({ id: consents.id }));
     await tx.update(residents).set({ firstName: "Former", lastName: "resident", email: null, phone: null, notes: null, userId: null }).where(eq(residents.id, residentId));
     const [row] = await tx.insert(privacyRequests).values({ orgId, kind: "erasure", residentId, userId: uid, subjectLabel: "Former resident", status: "completed", reason: input.reason, result, requestedByUserId: ctx.principal.userId }).returning();
@@ -328,6 +340,6 @@ export async function purgeExpiredExports(now = new Date()): Promise<number> {
 /* ───────────── consent ───────────── */
 
 // append-only record of a change in someone's email/SMS choices
-export async function recordConsent(tx: Tx, c: { orgId: string; userId?: string | null; residentId?: string | null; channel: "email" | "sms"; granted: boolean; source: "preferences" | "admin" | "signup"; recordedByUserId?: string | null; ip?: string | null }) {
+export async function recordConsent(tx: Tx, c: { orgId: string; userId?: string | null; residentId?: string | null; channel: "email" | "sms" | "push"; granted: boolean; source: "preferences" | "admin" | "signup"; recordedByUserId?: string | null; ip?: string | null }) {
   await tx.insert(consents).values({ orgId: c.orgId, userId: c.userId ?? null, residentId: c.residentId ?? null, channel: c.channel, granted: c.granted, source: c.source, recordedByUserId: c.recordedByUserId ?? null, ip: c.ip ?? null });
 }

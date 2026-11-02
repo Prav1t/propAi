@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { COMPLAINT_STATUSES, getComplaint } from "@/server/modules/complaints/service";
@@ -15,6 +17,7 @@ export default async function ComplaintPage({ params }: PageProps<"/o/[orgSlug]/
   const { orgSlug, id } = await params;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getComplaint(ctx, id));
+  after(() => recordView(ctx, { type: "complaint", id, title: `#${d.complaint.number} ${d.complaint.subject}`, href: `/o/${orgSlug}/complaints/${id}` }).catch(() => {})); // command palette "recent"
   const c = d.complaint;
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;

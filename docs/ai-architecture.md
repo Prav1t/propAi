@@ -265,3 +265,18 @@ Then two rankings run in one transaction — cosine similarity over the HNSW ind
 - When a subscription has lapsed (read-only), read tools keep working; every action tool returns `POLICY_DENIED` with the reason before anything is prepared, and approving an existing plan is blocked the same way (re-checked at approval time, like permissions and policies).
 - `property_health` is part of *Property health & insights* (`advanced_analytics`): on plans without it the tool says so instead of computing a score.
 - Automation rules (which can call the assistant to draft notes) only run when the plan includes automation and the organization isn't read-only.
+
+## 18. Voice input, follow-ups and the plan diff (Iteration 12)
+
+- **Voice input** (`components/ai/voice-input.tsx`, flag `voice_input`):
+  - **With a speech-to-text provider** (`transcriberFor()` in `server/ai/transcribe.ts`), the browser records up to 60 seconds with `MediaRecorder` and posts it to `/o/[org]/assistant/transcribe`. That route checks the same switches as a typed question (assistant enabled, the person may use it, plan and monthly caps, rate limit), forwards the audio to an OpenAI-compatible `/audio/transcriptions` endpoint, and records an `ai_usage` row.
+  - **Providers:** OpenAI or the compatible chat provider by default, or a separate `AI_TRANSCRIBE_BASE_URL`.
+  - **Without a provider,** the browser's Web Speech API is used where it exists (the browser vendor may process the audio).
+  - **Either way,** the words land in the question box and nothing is sent until the person presses Send.
+- **Suggested follow-ups** (`lib/assistant-followups.ts`):
+  - after an answer, up to three next questions are chosen from the tools that answer actually used (staff and resident sets);
+  - every one is a phrasing the demo model understands, so a click always gets a real answer;
+  - questions already asked in the conversation aren't repeated, and a unit test checks that each suggestion routes to a tool.
+- **Plan diff:** when someone edits a prepared plan, the card lists *You changed* with the old value struck through and the new one, so the approver sees what differs from what the assistant prepared.
+- **Keyboard:** `/` focuses the question box; `?` lists the app's shortcuts.
+

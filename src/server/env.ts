@@ -39,7 +39,15 @@ const schema = z.object({
   SESSION_ABSOLUTE_DAYS: z.coerce.number().int().min(1).max(365).default(90),
   // single sign-on: http:// issuers are only for local test identity providers (never production)
   OIDC_ALLOW_HTTP_ISSUERS: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  // web push (Iteration 12): VAPID keys from `npm run push:keys`; without them push is unavailable and says so.
+  // Subscriptions may only point at known browser push services; tests can allow a local receiver (never production).
+  VAPID_PUBLIC_KEY: z.preprocess((v) => (v === "" ? undefined : v), z.string().regex(/^[A-Za-z0-9_-]{80,100}$/, "base64url P-256 public key").optional()),
+  VAPID_PRIVATE_KEY: z.preprocess((v) => (v === "" ? undefined : v), z.string().regex(/^[A-Za-z0-9_-]{40,50}$/, "base64url P-256 private key").optional()),
+  VAPID_SUBJECT: z.string().regex(/^(mailto:|https:\/\/)/, "mailto: or https:// contact").default("mailto:ops@example.com"),
+  PUSH_ALLOW_PRIVATE_TARGETS: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 }).superRefine((v, c) => {
+  if (!!v.VAPID_PUBLIC_KEY !== !!v.VAPID_PRIVATE_KEY) c.addIssue({ code: "custom", path: ["VAPID_PUBLIC_KEY"], message: "set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY, or neither" });
+  if (v.NODE_ENV === "production" && v.PUSH_ALLOW_PRIVATE_TARGETS) c.addIssue({ code: "custom", path: ["PUSH_ALLOW_PRIVATE_TARGETS"], message: "not allowed in production" });
   if (v.MAIL_PROVIDER === "resend" && !v.RESEND_API_KEY) c.addIssue({ code: "custom", path: ["RESEND_API_KEY"], message: "required when MAIL_PROVIDER=resend" });
   if (v.MAIL_PROVIDER === "sendgrid" && !v.SENDGRID_API_KEY) c.addIssue({ code: "custom", path: ["SENDGRID_API_KEY"], message: "required when MAIL_PROVIDER=sendgrid" });
   if (v.BILLING_PROVIDER === "stripe" && (!v.STRIPE_SECRET_KEY || !v.STRIPE_WEBHOOK_SECRET)) c.addIssue({ code: "custom", path: ["STRIPE_SECRET_KEY"], message: "STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required when BILLING_PROVIDER=stripe" });

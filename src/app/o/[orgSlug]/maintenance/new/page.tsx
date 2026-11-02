@@ -32,6 +32,7 @@ export default async function NewWorkOrderPage({ params, searchParams }: PagePro
           <EmptyState title="No unit linked to your account">Ask your building manager to link your account to your unit, then you can submit requests here.</EmptyState>
         ) : (
           <WorkOrderForm action={createWorkOrderAction.bind(null, orgSlug)} mode={resident ? "resident" : "staff"} units={units} buildings={buildings}
+            drafts={{ userId: principal.userId, orgSlug }}
             assets={assets.map((a) => ({ value: a.id, label: `${a.name}${a.tag ? ` (${a.tag})` : ""} · ${a.propertyName}` }))}
             defaults={fromAsset ? { assetId: fromAsset.id, buildingId: fromAsset.buildingId ?? "", category: woCategoryForAsset(fromAsset.category) } : {}}
             categories={WO_CATEGORIES.map((c) => ({ value: c, label: WO_CATEGORY[c] }))} priorities={PRIORITY_ORDER.map((p) => ({ value: p, label: PRIORITY[p].label }))} />

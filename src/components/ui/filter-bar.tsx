@@ -2,11 +2,15 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Input, Select } from "./form";
+import { SavedViews, type SavedView } from "./saved-views";
 
 export type FilterDef = { name: string; label: string; options: { value: string; label: string }[]; allLabel?: string };
 
 // URL-driven filters: search is debounced, selects apply immediately, page resets on change
-export function FilterBar({ filters = [], searchPlaceholder = "Search…", search = true }: { filters?: FilterDef[]; searchPlaceholder?: string; search?: boolean }) {
+export function FilterBar({ filters = [], searchPlaceholder = "Search…", search = true, saved }: {
+  filters?: FilterDef[]; searchPlaceholder?: string; search?: boolean;
+  saved?: { orgSlug: string; page: string; views: SavedView[] }; // the person's saved views for this list
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -45,6 +49,7 @@ export function FilterBar({ filters = [], searchPlaceholder = "Search…", searc
         </div>
       ))}
       {pending ? <span className="text-xs text-faint" aria-live="polite">Updating…</span> : null}
+      {saved ? <SavedViews {...saved} /> : null}
     </div>
   );
 }

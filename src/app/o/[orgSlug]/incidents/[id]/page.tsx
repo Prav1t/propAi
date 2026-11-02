@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getIncident, INCIDENT_STATUSES, SEVERITIES } from "@/server/modules/incidents/service";
 import { Badge, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
@@ -14,6 +16,7 @@ export default async function IncidentPage({ params }: PageProps<"/o/[orgSlug]/i
   const { orgSlug, id } = await params;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getIncident(ctx, id));
+  after(() => recordView(ctx, { type: "incident", id, title: `#${d.incident.number} ${d.incident.title}`, href: `/o/${orgSlug}/incidents/${id}` }).catch(() => {})); // command palette "recent"
   const i = d.incident;
   const tz = principal.orgTimezone;
   return (

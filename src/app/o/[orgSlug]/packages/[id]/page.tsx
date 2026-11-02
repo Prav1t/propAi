@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getPackage } from "@/server/modules/packages/service";
 import { Badge, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
@@ -15,6 +17,7 @@ export default async function PackagePage({ params }: PageProps<"/o/[orgSlug]/pa
   const { orgSlug, id } = await params;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getPackage(ctx, id));
+  after(() => recordView(ctx, { type: "package", id, title: `${d.package.carrier ?? "Package"} for ${d.package.recipientName ?? `Unit ${d.labels?.unitNumber ?? ""}`}`, href: `/o/${orgSlug}/packages/${id}` }).catch(() => {})); // command palette "recent"
   const k = d.package;
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;

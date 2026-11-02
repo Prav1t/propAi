@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getInspection } from "@/server/modules/inspections/service";
@@ -17,6 +19,7 @@ export default async function InspectionPage({ params }: PageProps<"/o/[orgSlug]
   const { orgSlug, id } = await params;
   const { ctx, principal, session } = await getOrgContext(orgSlug);
   const d = await orNotFound(getInspection(ctx, id));
+  after(() => recordView(ctx, { type: "inspection", id, title: d.inspection.title, href: `/o/${orgSlug}/inspections/${id}` }).catch(() => {})); // command palette "recent"
   const i = d.inspection;
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;

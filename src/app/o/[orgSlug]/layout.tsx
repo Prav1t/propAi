@@ -1,5 +1,5 @@
 import { getOrgContext } from "@/server/org-context";
-import { visibleNav } from "@/config/navigation";
+import { bottomTabsFor, visibleNav } from "@/config/navigation";
 import { DesktopSidebar, MobileNav } from "@/components/shell/sidebar";
 import { UserMenu } from "@/components/shell/user-menu";
 import { CommandPalette, type Command } from "@/components/shell/command-palette";
@@ -8,7 +8,10 @@ import { searchAction } from "./search-action";
 import { unreadCount } from "@/server/modules/notifications/service";
 import { Icon } from "@/components/shell/icons";
 import Link from "next/link";
-import { ResidentTabs } from "@/components/shell/resident-tabs";
+import { BottomTabs } from "@/components/shell/bottom-tabs";
+import { DraftSync } from "@/components/shell/draft-sync";
+import { KeyboardShortcuts } from "@/components/shell/keyboard-shortcuts";
+import { sendWorkOrderDraftAction } from "./ops-actions";
 import { messageBadgeCount } from "@/server/modules/messaging/service";
 import { unreadAnnouncementCount } from "@/server/modules/announcements/service";
 import { listPackages, canUsePackages } from "@/server/modules/packages/service";
@@ -18,13 +21,14 @@ import { parkingStats } from "@/server/modules/parking/service";
 import { BRAND } from "@/config/brand";
 import { pendingApprovalsFor } from "@/server/automation/service";
 import { billingBanner } from "@/server/billing/service";
+import { listRecent } from "@/server/modules/views/service";
 
 export default async function OrgLayout({ children, params }: LayoutProps<"/o/[orgSlug]">) {
   const { orgSlug } = await params;
   const { session, principal, ctx } = await getOrgContext(orgSlug);
   const resident = principal.role.category === "resident";
   // live counts for nav badges (each query is permission-scoped and cheap)
-  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview, approvals, billing] = await Promise.all([
+  const [unread, messages, announcements, packages, bookings, visitorsOnSite, parkingReview, approvals, billing, recent] = await Promise.all([
     unreadCount(ctx),
     messageBadgeCount(ctx),
     resident ? unreadAnnouncementCount(ctx) : Promise.resolve(0),
@@ -34,6 +38,7 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     !resident ? parkingStats(ctx).then((r) => r?.review ?? 0) : Promise.resolve(0),
     !resident ? pendingApprovalsFor(ctx).then((r) => r.length) : Promise.resolve(0),
     billingBanner(principal.orgId),
+    listRecent(ctx, 8).catch(() => []), // the palette works without it
   ]);
   const billingManager = principal.permissions.has("billing.manage");
   const badges: Record<string, number> = { messages, announcements, packages, bookings, visitors: visitorsOnSite, parking: parkingReview, approvals };
@@ -42,6 +47,7 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     items: s.items.map((i) => ({ label: i.label, icon: i.icon, href: i.href(orgSlug), badge: i.badgeKey ? badges[i.badgeKey] : undefined })),
   }));
   const base = `/o/${orgSlug}`;
+  const tabs = bottomTabsFor(principal.role, principal.permissions).map((t) => ({ label: t.label, icon: t.icon, href: t.href(orgSlug), badge: t.badgeKey ? badges[t.badgeKey] : undefined }));
   // quick actions shown in the palette, filtered by permission (server still enforces)
   const actions: Command[] = [
     ...(principal.permissions.has("workorder.create") ? [{ label: principal.role.category === "resident" ? "Submit maintenance request" : "Create work order", href: `${base}/maintenance/new`, group: "Action", keywords: "new maintenance request repair fix broken leak" }] : []),
@@ -77,6 +83,12 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
     ...(principal.permissions.has("api.manage") ? [{ label: "API keys and webhooks", href: `${base}/settings/developers`, group: "Action", keywords: "api key token webhook developer rest" }] : []),
     { label: "Account security", href: "/account/security", group: "Account", keywords: "password 2fa mfa sessions" },
   ];
+  // "g" + letter shortcuts to places this person can open (see KeyboardShortcuts)
+  const navHrefs = new Set(sections.flatMap((s) => s.items.map((i) => i.href)));
+  const jumps = ([["d", "dashboard", "Dashboard"], ["m", "maintenance", "Maintenance"], ["t", "tasks", "Tasks"], ["i", "inspections", "Inspections"], ["p", "packages", "Packages"],
+    ["a", "assistant", "the assistant"], ["y", "analytics", "Analytics"], ["c", "calendar", "Calendar"]] as const)
+    .filter(([, path]) => navHrefs.has(`${base}/${path}`)).map(([key, path, label]): { key: string; href: string; label: string } => ({ key, href: `${base}/${path}`, label }))
+    .concat([{ key: "n", href: `${base}/notifications`, label: "Notifications" }]);
   const commands: Command[] = [...sections.flatMap((s) => s.items.map((i) => ({ label: `Go to ${i.label}`, href: i.href, group: s.title ?? "Navigate" }))), ...actions];
   return (
     <div className="min-h-dvh">
@@ -87,10 +99,11 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
           <div className="flex items-center gap-2">
             <MobileNav sections={sections} orgName={principal.orgName} roleName={principal.role.name} />
             <span className="hidden text-sm font-medium sm:inline lg:hidden">{principal.orgName}</span>
-            <CommandPalette commands={commands} search={searchAction.bind(null, orgSlug)} searchPage={`${base}/search`}
+            <CommandPalette commands={commands} recent={recent.map((r) => ({ label: r.title, href: r.href, group: r.label }))} search={searchAction.bind(null, orgSlug)} searchPage={`${base}/search`}
               ask={principal.permissions.has("ai.use") ? { href: `${base}/assistant`, name: BRAND.assistantName } : null} />
           </div>
           <div className="flex items-center gap-1">
+          <KeyboardShortcuts jumps={jumps} create={principal.permissions.has("workorder.create") ? { href: `${base}/maintenance/new`, label: resident ? "Report a problem" : "Create a work order" } : null} />
           <Link href={`${base}/notifications`} className="relative inline-flex size-9 items-center justify-center rounded-[var(--radius-md)] text-muted hover:bg-subtle hover:text-fg"
             aria-label={unread ? `Notifications, ${unread} unread` : "Notifications"}>
             <Icon name="bell" className="size-[18px]" />
@@ -110,20 +123,15 @@ export default async function OrgLayout({ children, params }: LayoutProps<"/o/[o
             <Link className="font-medium underline" href={`${base}/settings/billing`}>{billing.state === "trial" ? "Choose a plan" : "Update billing"}</Link>
           </div>
         ) : null}
+        {principal.permissions.has("workorder.create") ? <DraftSync userId={principal.userId} orgSlug={orgSlug} send={sendWorkOrderDraftAction.bind(null, orgSlug)} /> : null}
         {!session.user.mfaEnabled && principal.role.category === "staff" && principal.permissions.has("member.manage") ? (
           <div className="border-b border-border bg-warning-soft px-4 py-2 text-[13px] text-warning">
             Admins should turn on two-factor authentication. <a className="font-medium underline" href="/account/security">Set it up</a>
           </div>
         ) : null}
-        <main id="main" className={`mx-auto max-w-6xl px-4 py-6 sm:px-6${resident ? " pb-24 lg:pb-6" : ""}`}>{children}</main>
+        <main id="main" className={`mx-auto max-w-6xl px-4 py-6 sm:px-6${tabs.length ? " pb-24 lg:pb-6" : ""}`}>{children}</main>
       </div>
-      {resident ? <ResidentTabs tabs={[
-        { label: "Home", href: `${base}/dashboard`, icon: "home" },
-        ...(principal.permissions.has("workorder.create") ? [{ label: "Requests", href: `${base}/maintenance`, icon: "wrench" }] : []),
-        ...(principal.permissions.has("amenity.read") ? [{ label: "Book", href: `${base}/amenities`, icon: "calendar" }] : []),
-        ...(canUsePackages(principal) ? [{ label: "Packages", href: `${base}/packages`, icon: "box", badge: packages }] : []),
-        ...(principal.permissions.has("message.use") ? [{ label: "Messages", href: `${base}/messages`, icon: "message", badge: messages }] : []),
-      ]} /> : null}
+      {tabs.length ? <BottomTabs tabs={tabs} /> : null}
     </div>
   );
 }

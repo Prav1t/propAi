@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getDocument } from "@/server/modules/documents/service";
 import { DOCUMENT_CATEGORIES } from "@/server/db/schema";
@@ -19,6 +21,7 @@ export default async function DocumentPage({ params }: PageProps<"/o/[orgSlug]/d
   const { orgSlug, id } = await params;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getDocument(ctx, id));
+  after(() => recordView(ctx, { type: "document", id, title: d.document.title, href: `/o/${orgSlug}/documents/${id}` }).catch(() => {})); // command palette "recent"
   const doc = d.document;
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;

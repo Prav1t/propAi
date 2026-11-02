@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>You're offline</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #fafafa; --fg: #18181b; --muted: #52525b; --border: #e4e4e7; --accent: #2f5bd3; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0f0f11; --fg: #ededf0; --muted: #a1a1aa; --border: #2a2a2f; --accent: #6d8ff0; } }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; text-align: center; }
+    h1 { font-size: 18px; margin: 16px 0 8px; }
+    p { color: var(--muted); font-size: 14px; max-width: 26rem; line-height: 1.5; margin: 0 0 8px; }
+    a { display: inline-block; margin-top: 16px; padding: 10px 16px; border-radius: 6px; background: var(--accent); color: #fff; text-decoration: none; font-size: 14px; font-weight: 500; }
+    svg { width: 40px; height: 40px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M14 10.2a10 10 0 0 1 5 2.7M2 8.8a15 15 0 0 1 4.4-2.9M9.5 5.2A15 15 0 0 1 22 8.8M12 20h.01"/></svg>
+    <h1>You're offline</h1>
+    <p>This page needs a connection. Requests you were writing when the connection dropped are saved on this device and will be sent when you're back online.</p>
+    <a href="/orgs">Try again</a>
+  </main>
+</body>
+</html>

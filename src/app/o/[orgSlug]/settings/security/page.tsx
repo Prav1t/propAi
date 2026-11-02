@@ -1,12 +1,14 @@
 import { notFound } from "next/navigation";
 import { getOrgContext } from "@/server/org-context";
 import { getSecuritySettings } from "@/server/sso/service";
+import { listMemberSessions } from "@/server/modules/members/sessions";
+import { deviceName } from "@/lib/device";
 import { Badge, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { FormAlert } from "@/components/ui/form";
 import { SchemaForm } from "@/components/ui/schema-form";
 import { ConfirmAction } from "@/components/ui/confirm-action";
 import { SSO_PROVIDER_KEYS, SSO_PROVIDERS } from "@/lib/sso";
-import { addDomainAction, removeDomainAction, saveConnectionAction, savePolicyAction, setConnectionStatusAction, verifyDomainAction } from "./actions";
+import { addDomainAction, removeDomainAction, saveConnectionAction, savePolicyAction, setConnectionStatusAction, signOutMemberAction, verifyDomainAction } from "./actions";
 
 export const metadata = { title: "Security" };
 
@@ -14,7 +16,7 @@ export default async function SecuritySettingsPage({ params }: PageProps<"/o/[or
   const { orgSlug } = await params;
   const { ctx, principal, session } = await getOrgContext(orgSlug);
   if (!principal.permissions.has("security.manage")) notFound();
-  const s = await getSecuritySettings(ctx);
+  const [s, signedIn] = await Promise.all([getSecuritySettings(ctx), listMemberSessions(ctx)]);
   const tz = principal.orgTimezone;
   const fmt = (d: Date | null) => (d ? d.toLocaleString("en-CA", { timeZone: tz, dateStyle: "medium", timeStyle: "short" }) : "—");
   const c = s.connection;
@@ -94,6 +96,31 @@ export default async function SecuritySettingsPage({ params }: PageProps<"/o/[or
             <SchemaForm action={addDomainAction.bind(null, orgSlug)} submitLabel="Add domain" pendingLabel="Adding…" resetOnSuccess fields={[{ name: "domain", label: "Domain", placeholder: "example.com" }]} />
           </div>
           {verified.length === 0 && c ? <div className="px-4 pb-4"><FormAlert kind="info">Verify at least one domain before anyone can use single sign-on.</FormAlert></div> : null}
+        </Panel>
+
+        <Panel className="lg:col-span-2" data-testid="member-sessions">
+          <PanelHeader title="Signed-in members" description="Everyone with an active session, and their devices. To stop someone using this organization at once, deactivate them in Members." />
+          {signedIn.length === 0 ? <p className="px-4 py-3 text-sm text-muted">Nobody is signed in right now.</p> : (
+            <ul className="divide-y divide-border">
+              {signedIn.map((m) => (
+                <li key={m.membershipId} className="space-y-1.5 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm"><span className="font-medium">{m.name}</span> <span className="text-[13px] text-muted">{m.email}</span></span>
+                    {m.userId === principal.userId ? <Badge>You</Badge>
+                      : (!m.elsewhere || m.sessions.some((x) => x.viaOurSso)) ? (
+                        <ConfirmAction action={signOutMemberAction.bind(null, orgSlug, m.membershipId)} label={m.elsewhere ? "End SSO sessions" : "Sign out everywhere"} confirmLabel="Sign out" variant="secondary"
+                          description={m.elsewhere ? `${m.name} also uses other organizations, so only the sessions started through your single sign-on end.` : `${m.name} will need to sign in again on every device.`} />
+                      ) : <span className="text-[12px] text-faint">Also uses other organizations</span>}
+                  </div>
+                  <ul className="space-y-0.5 text-[12px] text-muted">
+                    {m.sessions.map((x, i) => (
+                      <li key={i}>{deviceName(x.userAgent)} · {x.methods.includes("sso") || x.methods.includes("sso_mfa") ? "single sign-on" : x.methods.includes("otp") ? "password + 2FA" : "password"}{x.viaOurSso ? " (your SSO)" : ""} · active {fmt(x.lastSeenAt)}{x.ip ? ` · ${x.ip}` : ""}</li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
         </Panel>
       </div>
     </>

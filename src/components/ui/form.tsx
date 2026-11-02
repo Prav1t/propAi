@@ -2,7 +2,7 @@ import { useId, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 const control =
-  "block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 h-9 text-sm text-fg placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 aria-[invalid=true]:border-danger";
+  "block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 h-9 text-sm text-fg placeholder:text-faint pointer-coarse:h-11 pointer-coarse:text-base focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 aria-[invalid=true]:border-danger";
 
 // React 19: ref is a plain prop and passes through
 export function Input({ className, ...props }: ComponentProps<"input">) {

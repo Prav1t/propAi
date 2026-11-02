@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { assetFormOptions, getAsset } from "@/server/modules/assets/service";
@@ -22,6 +24,7 @@ export default async function AssetPage({ params }: PageProps<"/o/[orgSlug]/asse
   const { orgSlug, id } = await params;
   const { ctx } = await getOrgContext(orgSlug);
   const d = await orNotFound(getAsset(ctx, id));
+  after(() => recordView(ctx, { type: "asset", id, title: d.asset.name, href: `/o/${orgSlug}/assets/${id}` }).catch(() => {})); // command palette "recent"
   const a = d.asset;
   const tz = d.labels.tz;
   const base = `/o/${orgSlug}`;

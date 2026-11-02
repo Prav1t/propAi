@@ -57,6 +57,24 @@
   }
 }
 
+/* phone layout for <Table cards>: rows become cards. Unlayered, so it also reveals cells that utilities hide on small
+   screens (`hidden md:table-cell`): a card has room for them. Each value is read with its column name before it. */
+@media (max-width: 639.98px) {
+  .table-cards thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .table-cards, .table-cards tbody, .table-cards tr, .table-cards td { display: block; width: 100%; }
+  .table-cards tr { border-bottom: 1px solid var(--color-border); padding: 0.625rem 0; }
+  .table-cards tbody tr:last-child { border-bottom: 0; }
+  .table-cards td { border: 0; padding: 0.125rem 1rem; text-align: left; }
+  .table-cards td:empty, .table-cards td[data-card-hide] { display: none; }
+  .table-cards td[data-label]::before {
+    content: attr(data-label); display: inline-block; min-width: 6.5rem; margin-right: 0.5rem;
+    color: var(--color-faint); font-size: 12px;
+  }
+  .table-cards td[data-label] { font-size: 13px; }
+}
+
 /* reports print as plain tables: no navigation, no buttons */
 @media print {
   [data-print-hide] { display: none !important; }

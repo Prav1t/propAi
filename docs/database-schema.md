@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–10)
+## Implemented (Iterations 1–12)
 
 ### Identity & auth (🌐)
 
@@ -217,6 +217,24 @@ New columns: `outbox_events.webhooks_at` (fan-out done; backfilled for history i
 | `audit_no_update()` | `BEFORE UPDATE` trigger: entries are immutable |
 | `audit_prune(org, before)` | Retention, never less than 365 days; records the boundary checkpoint |
 | `audit_verify(chain)` | Returns entries checked and the first problem |
+
+### Personal views & devices (🔒, Iteration 12)
+
+All three tables belong to one person in one organization. Their RLS policy (`owner_only`, migration `0026`) admits a row only when `org_id = app_org()` and either `user_id = app_user()` or the request runs in the system context. The system context covers push delivery, privacy export and erasure, and retention.
+
+| Table | Purpose / key columns |
+|---|---|
+| `saved_views` | `page` (e.g. `maintenance`), `name` (1–60 characters, unique per person and page), `query` (a sanitized query string, ≤ 1000 characters) |
+| `recent_views` | `entity_type`, `entity_id`, `title`, `href`, `viewed_at`; one row per record (`recent_views_entity_uq`), trimmed to the newest 20 per person |
+| `push_subscriptions` | `endpoint` (unique per organization; `https://` only, or `http://127.0.0.1:` for test receivers), `p256dh`, `auth` (the browser's encryption keys), `user_agent`, `last_success_at`, `failures` |
+
+**New columns (migration `0025`):**
+
+- **`work_orders.client_ref`:** the offline draft's reference. The partial unique index `work_orders_client_ref_uq` on `(org_id, submitted_by_user_id, client_ref)` means a draft sent twice creates one request.
+- **`notification_preferences.push`:** per notification type, default on.
+- **`consents.channel`:** now also accepts `push`.
+
+Custom roles use the existing `roles` table (`org_id` set, `is_system = false`, permissions in the `permissions` array); no schema change was needed.
 
 ### Full-text search
 

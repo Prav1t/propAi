@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listSavedViews } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { listAmenities, listBookings, type BookingView } from "@/server/modules/amenities/service";
 import { Badge, EmptyState, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
@@ -17,6 +18,7 @@ export default async function BookingsPage({ params, searchParams }: PageProps<"
   const { orgSlug } = await params;
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
+  const savedViews = await listSavedViews(ctx, "bookings");
   const staff = principal.role.category === "staff";
   if (!staff && !principal.permissions.has("amenity.read")) notFound();
   const views: { key: BookingView; label: string }[] = staff
@@ -31,19 +33,19 @@ export default async function BookingsPage({ params, searchParams }: PageProps<"
       <PageHeader title={staff ? "Bookings" : "My bookings"} actions={<LinkButton href={base} variant={staff ? "secondary" : "primary"}>{staff ? "Amenities" : "Book an amenity"}</LinkButton>} />
       <Panel>
         <LinkTabs active={view} tabs={views.map((v) => ({ key: v.key, label: v.label, href: `${base}/bookings?view=${v.key}${sp(q.amenity) ? `&amenity=${sp(q.amenity)}` : ""}`, count: v.key === view ? data.total : null }))} />
-        {staff && amenityOpts.length > 1 ? <FilterBar search={false} filters={[{ name: "amenity", label: "Amenity", options: amenityOpts }]} /> : null}
+        {staff && amenityOpts.length > 1 ? <FilterBar saved={{ orgSlug, page: "bookings", views: savedViews }} search={false} filters={[{ name: "amenity", label: "Amenity", options: amenityOpts }]} /> : null}
         {data.rows.length === 0 ? <EmptyState title={view === "pending" ? "Nothing waiting for approval" : "No bookings here"} /> : (
-          <Table>
+          <Table cards>
             <thead><tr><Th className="w-16">#</Th><Th>Booking</Th>{staff ? <Th className="hidden md:table-cell">Unit</Th> : null}<Th>Status</Th><Th className="hidden lg:table-cell">Payment</Th></tr></thead>
             <tbody>
               {data.rows.map((b) => (
                 <tr key={b.id} className="hover:bg-subtle/60">
-                  <Td className="tabular-nums text-muted">{b.number}</Td>
+                  <Td label="#" className="tabular-nums text-muted">{b.number}</Td>
                   <Td><Link className="font-medium hover:underline" href={`${base}/bookings/${b.id}`}>{b.amenityName}</Link>
                     <div className="text-xs text-faint">{when(b.startsAt, b.endsAt, b.tz)} · {b.guests} {b.guests === 1 ? "person" : "people"}</div></Td>
-                  {staff ? <Td className="hidden text-[13px] text-muted md:table-cell">{b.unitNumber ? `Unit ${b.unitNumber}` : "Staff"}{b.bookedBy ? <span className="block text-xs text-faint">{b.bookedBy}</span> : null}</Td> : null}
-                  <Td><Badge tone={BOOKING_STATUS[b.status]?.tone}>{BOOKING_STATUS[b.status]?.label}</Badge></Td>
-                  <Td className="hidden text-[13px] text-muted lg:table-cell">{[b.feeCents ? FEE_STATUS[b.feeStatus] : null, b.depositCents ? DEPOSIT_STATUS[b.depositStatus] : null].filter(Boolean).join(" · ") || "—"}</Td>
+                  {staff ? <Td label="Unit" className="hidden text-[13px] text-muted md:table-cell">{b.unitNumber ? `Unit ${b.unitNumber}` : "Staff"}{b.bookedBy ? <span className="block text-xs text-faint">{b.bookedBy}</span> : null}</Td> : null}
+                  <Td label="Status"><Badge tone={BOOKING_STATUS[b.status]?.tone}>{BOOKING_STATUS[b.status]?.label}</Badge></Td>
+                  <Td label="Payment" className="hidden text-[13px] text-muted lg:table-cell">{[b.feeCents ? FEE_STATUS[b.feeStatus] : null, b.depositCents ? DEPOSIT_STATUS[b.depositStatus] : null].filter(Boolean).join(" · ") || "—"}</Td>
                 </tr>
               ))}
             </tbody>

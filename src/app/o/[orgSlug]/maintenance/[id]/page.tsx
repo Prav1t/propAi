@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { getWorkOrder } from "@/server/modules/maintenance/service";
@@ -24,6 +26,7 @@ export default async function WorkOrderPage({ params, searchParams }: PageProps<
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
   const d = await orNotFound(getWorkOrder(ctx, id));
+  after(() => recordView(ctx, { type: "work_order", id, title: `#${d.workOrder.number} ${d.workOrder.title}`, href: `/o/${orgSlug}/maintenance/${id}` }).catch(() => {})); // command palette "recent"
   const w = d.workOrder;
   const tz = principal.orgTimezone;
   const base = `/o/${orgSlug}`;

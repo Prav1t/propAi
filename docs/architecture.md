@@ -291,6 +291,43 @@ service (one transaction)                 worker (system context)
 
 **Platform console** (`/admin`, platform admins only, re-checked server-side): organizations with plan and subscription state, estimated monthly revenue (from plan prices × unit counts of active subscriptions), trials ending soon, platform AI/API/webhook activity, global and per-organization feature flags, and per-organization subscription changes (plan, trial extension, limit overrides — "support-managed" subscriptions) with an audit entry for each.
 
+## 10a. Client experience: states, offline, push (Iteration 12)
+
+**Loading, empty and error states.**
+- **Streaming:** the dashboard renders its frame first and streams each section (attention, operations, community, facility, my work, portfolio) behind its own Suspense boundary. A section that fails shows a small fallback (`SectionBoundary`, built on `catchError` from `next/error`) while the others still render.
+- **Where boundaries go:** sections are placed *after* authorization, never in a `loading.tsx` above it. A `loading.tsx` makes the response stream with status 200 before the page decides on a 404.
+- **Error pages:** `error.tsx` files (org area, root, `global-error.tsx`) show what happened, a **Try again** that calls `retry()`, and a **reference**: the error digest Next.js puts on the server log line. `instrumentation.ts onRequestError` logs each failed request once (`request.error`); a browser that disconnects mid-stream is logged at debug level, not as an error.
+- **Fault injection for tests:** `faultPoint(name)` (`server/dev-faults.ts`) lets E2E tests make a named point fail with the `x-e2e-fault` header. It only works with `E2E_FAULTS=true` outside production.
+
+**Installable app.**
+- **Manifest and worker:** `app/manifest.ts` provides the name, standalone display and PNG + maskable icons. `public/sw.js` is registered at `/` scope; in production it is registered as `/sw.js?static=1`.
+- **What the worker caches:** only content-hashed `/_next/static/*` files (production) and `offline.html`. It never caches pages or API responses: they hold personal data and a per-request CSP nonce. A navigation without a network gets the offline page.
+- **CSP:** `worker-src 'self'`.
+
+**Offline drafts** (maintenance requests).
+- **Saving:** when the browser is offline, or the submit fails with a network error, the form keeps the request in IndexedDB (`lib/drafts.ts`): the fields, the photos as blobs, and the form's `clientRef`. Each draft belongs to one user in one organization, and drafts are deleted on sign-out.
+- **Sending:** `DraftSync` sends drafts oldest first when the `online` event fires (and on load) through `sendWorkOrderDraftAction`, which runs the same validation and permission checks as the form.
+- **Exactly once:** `work_orders_client_ref_uq` is a partial unique index on `(org_id, submitted_by_user_id, client_ref)`. A second send of the same draft returns the existing request instead of creating another (`duplicate: true`), and its photos aren't uploaded again.
+
+**Web push** (`server/push/service.ts`).
+- **Subscriptions:** the browser's `PushSubscription` is stored per user per organization (`push_subscriptions`, owner-only RLS) together with a `consents` row (`channel = 'push'`).
+- **Delivery:** the notification engine sends to every subscription of the recipient whose preferences allow push for that notification type. Payloads are encrypted with `aes128gcm` and VAPID-signed (web-push `generateRequestDetails`).
+- **Network safety:** requests go out through the SSRF-safe client. Only the browser vendors' push hosts are allowed (`fcm.googleapis.com`, `push.services.mozilla.com`, `notify.windows.com`, `push.apple.com`); 127.0.0.1 is allowed only with `PUSH_ALLOW_PRIVATE_TARGETS` in tests.
+- **Cleanup:** a 404 or 410 removes the subscription; other failures are counted, and a subscription that keeps failing is removed. The `web_push` flag and missing VAPID keys both turn push off, and the settings page says so.
+
+**Personal navigation.**
+- **Saved views:** `saved_views` holds named query strings per list page. They are sanitized (well-formed keys only, no page number, bounded lengths), so a saved view holds nothing a list URL couldn't.
+- **Recent records:** `recent_views` records the last records each person opened, written in `after()` once the page has rendered. The command palette shows them first and filters out anything the person can no longer read (`RECENT_TYPES` lists the permissions each type needs).
+- **Bulk changes:** `server/modules/maintenance/bulk.ts` runs each item through the single-item service, so every item gets its own permission check, state-machine rule, audit entry, timeline line and events. Items that can't change are reported and the rest go ahead.
+
+**Administration.**
+- **Custom roles** (`server/modules/members/roles.ts`, permission `role.manage`):
+  - the F-03 rules apply: you can't grant a permission you don't hold;
+  - property-scoped editors can define only property-scoped roles;
+  - a role's scope is fixed while it has members, and a role with members can't be deleted;
+  - changes need a recent sign-in.
+- **Signed-in members** (`server/modules/members/sessions.ts`) lists active sessions with their device, sign-in method and last activity. Signing a member out ends all their sessions, except for people who also belong to other organizations: then only the sessions started through this organization's SSO end.
+
 ## 11. Deployment
 
 - **Dev:** `docker compose up` → Postgres (pgvector image), Mailpit, app; add `--profile s3` with `FILE_STORAGE=s3` for MinIO. Or run Postgres yourself and `npm run dev`.

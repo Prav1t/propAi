@@ -28,7 +28,7 @@ export default async function MembersPage({ params }: PageProps<"/o/[orgSlug]/se
       <PageHeader title="Members" description={`${members.filter((m) => m.status === "active").length} active members. Access is scoped by role and property.`} />
       <div className="space-y-6">
         <Panel>
-          <Table>
+          <Table cards>
             <thead><tr><Th>Member</Th><Th>Role</Th><Th className="hidden md:table-cell">Scope</Th><Th className="hidden md:table-cell">Last sign-in</Th><Th>Status</Th>{canManage ? <Th><span className="sr-only">Actions</span></Th> : null}</tr></thead>
             <tbody>
               {members.map((m) => (
@@ -39,12 +39,12 @@ export default async function MembersPage({ params }: PageProps<"/o/[orgSlug]/se
                       <div className="min-w-0"><div className="truncate font-medium">{m.name}{m.userId === principal.userId ? <span className="font-normal text-faint"> (you)</span> : null}</div><div className="truncate text-xs text-faint">{m.email}</div></div>
                     </div>
                   </Td>
-                  <Td>{m.roleName}</Td>
-                  <Td className="hidden text-muted md:table-cell">{m.scopeLevel === "org" ? "Organization-wide" : m.scopeLevel === "occupant" ? "Own unit" : m.scopeLevel === "assigned" ? "Assigned work" : m.scopes.length ? m.scopes.join(", ") : "Portfolio / building"}</Td>
-                  <Td className="hidden text-muted md:table-cell">{fmt(m.lastLoginAt)}</Td>
-                  <Td>{m.status === "active" ? <Badge tone="success">Active</Badge> : <Badge>Deactivated</Badge>} {m.mfaEnabled ? <Badge tone="accent">2FA</Badge> : null}</Td>
+                  <Td label="Role">{m.roleName}</Td>
+                  <Td label="Scope" className="hidden text-muted md:table-cell">{m.scopeLevel === "org" ? "Organization-wide" : m.scopeLevel === "occupant" ? "Own unit" : m.scopeLevel === "assigned" ? "Assigned work" : m.scopes.length ? m.scopes.join(", ") : "Portfolio / building"}</Td>
+                  <Td label="Last sign-in" className="hidden text-muted md:table-cell">{fmt(m.lastLoginAt)}</Td>
+                  <Td label="Status">{m.status === "active" ? <Badge tone="success">Active</Badge> : <Badge>Deactivated</Badge>} {m.mfaEnabled ? <Badge tone="accent">2FA</Badge> : null}</Td>
                   {canManage ? (
-                    <Td className="text-right">
+                    <Td className="sm:text-right">
                       {m.membershipId !== principal.membershipId ? (
                         <ManageMember orgSlug={orgSlug} membershipId={m.membershipId} status={m.status} roles={roles} properties={properties} />
                       ) : null}

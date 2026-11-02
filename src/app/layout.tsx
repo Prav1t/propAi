@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { connection } from "next/server";
 import { BRAND } from "@/config/brand";
 import "./globals.css";
+import { ServiceWorker } from "@/components/shell/service-worker";
 
 export const metadata: Metadata = {
   title: { default: BRAND.name, template: `%s · ${BRAND.name}` },
@@ -20,7 +21,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   await connection();
   return (
     <html lang="en">
-      <body className="min-h-dvh">{children}</body>
+      <body className="min-h-dvh">
+        {children}
+        <ServiceWorker />
+      </body>
     </html>
   );
 }

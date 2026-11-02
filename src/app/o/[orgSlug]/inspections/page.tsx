@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listSavedViews } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { listInspections } from "@/server/modules/inspections/service";
 import { listPropertyOptions } from "@/server/modules/portfolio/service";
-import { Badge, EmptyState, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, PageHeader, Panel, Table, Td, Th, ListEmpty, hasFilters } from "@/components/ui/primitives";
 import { LinkButton } from "@/components/ui/button";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
@@ -17,6 +18,7 @@ export default async function InspectionsPage({ params, searchParams }: PageProp
   const { orgSlug } = await params;
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
+  const savedViews = await listSavedViews(ctx, "inspections");
   if (!principal.permissions.has("inspection.read") && !principal.permissions.has("inspection.manage")) notFound();
   const view = VIEWS.find((v) => v.key === sp(q.view))?.key ?? "upcoming";
   const data = await orNotFound(listInspections(ctx, { view, propertyId: sp(q.property), page: Number(sp(q.page)) || 1 }));
@@ -29,19 +31,19 @@ export default async function InspectionsPage({ params, searchParams }: PageProp
         actions={manage ? <div className="flex gap-2"><LinkButton variant="secondary" href={`${base}/templates`}>Templates</LinkButton><LinkButton href={`${base}/new`}>Schedule inspection</LinkButton></div> : null} />
       <Panel>
         <LinkTabs active={view} tabs={VIEWS.map((v) => ({ key: v.key, label: v.label, href: `${base}?view=${v.key}`, count: v.key === view ? data.total : null }))} />
-        {props.length > 1 ? <FilterBar search={false} filters={[{ name: "property", label: "Property", options: props.map((p) => ({ value: p.id, label: p.name })) }]} /> : null}
-        {data.rows.length === 0 ? <EmptyState title={view === "overdue" ? "Nothing overdue" : "No inspections here"} /> : (
-          <Table>
+        {props.length > 1 ? <FilterBar saved={{ orgSlug, page: "inspections", views: savedViews }} search={false} filters={[{ name: "property", label: "Property", options: props.map((p) => ({ value: p.id, label: p.name })) }]} /> : null}
+        {data.rows.length === 0 ? <ListEmpty title={view === "overdue" ? "Nothing overdue" : "No inspections here"} filtered={hasFilters(q)} clearHref={`${base}?view=${view}`} create={manage && view !== "overdue" ? { href: `${base}/new`, label: "Schedule inspection" } : null} /> : (
+          <Table cards>
             <thead><tr><Th>Inspection</Th><Th className="hidden sm:table-cell">Date</Th><Th>Status</Th><Th className="hidden md:table-cell">Inspector</Th><Th className="hidden md:table-cell text-right">Failed items</Th></tr></thead>
             <tbody>
               {data.rows.map((i) => (
                 <tr key={i.id} className="hover:bg-subtle/60">
                   <Td><Link className="font-medium hover:underline" href={`${base}/${i.id}`}>{i.title}</Link>
                     <div className="text-xs text-faint">{[INSPECTION_KIND[i.kind] ?? i.kind, i.propertyName, i.buildingName, i.unitNumber ? `Unit ${i.unitNumber}` : null].filter(Boolean).join(" · ")}</div></Td>
-                  <Td className="hidden tabular-nums text-[13px] text-muted sm:table-cell">{i.scheduledFor}</Td>
-                  <Td>{i.status === "completed" && i.result ? <Badge tone={i.result === "pass" ? "success" : "danger"}>{i.result === "pass" ? "Passed" : "Failed"}</Badge> : <Badge tone={INSPECTION_STATUS[i.status]?.tone}>{INSPECTION_STATUS[i.status]?.label}</Badge>}</Td>
-                  <Td className="hidden text-[13px] text-muted md:table-cell">{i.inspectorName ?? "—"}</Td>
-                  <Td className="hidden text-right tabular-nums md:table-cell">{i.failed ? <span className="text-danger">{i.failed}</span> : <span className="text-faint">0</span>}<span className="text-faint"> / {i.total}</span></Td>
+                  <Td label="Date" className="hidden tabular-nums text-[13px] text-muted sm:table-cell">{i.scheduledFor}</Td>
+                  <Td label="Status">{i.status === "completed" && i.result ? <Badge tone={i.result === "pass" ? "success" : "danger"}>{i.result === "pass" ? "Passed" : "Failed"}</Badge> : <Badge tone={INSPECTION_STATUS[i.status]?.tone}>{INSPECTION_STATUS[i.status]?.label}</Badge>}</Td>
+                  <Td label="Inspector" className="hidden text-[13px] text-muted md:table-cell">{i.inspectorName ?? "—"}</Td>
+                  <Td label="Failed items" className="hidden text-right tabular-nums md:table-cell">{i.failed ? <span className="text-danger">{i.failed}</span> : <span className="text-faint">0</span>}<span className="text-faint"> / {i.total}</span></Td>
                 </tr>
               ))}
             </tbody>

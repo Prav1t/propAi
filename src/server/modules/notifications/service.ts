@@ -1,4 +1,5 @@
 import "server-only";
+import { sendPushToUsers, type PushPayload } from "@/server/push/service";
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { withContext, type Tx } from "../../db/client";
 import {
@@ -188,6 +189,7 @@ async function deliveriesFor(tx: Tx, e: Event, base: string): Promise<Delivery[]
 
 // delivers one event: idempotent per (event, user); the actor never notifies themselves
 async function processEvent(e: Event): Promise<void> {
+  const pushes: { userIds: string[]; payload: PushPayload }[] = [];
   const emails = await withContext({ orgId: e.orgId, system: true }, async (tx) => {
     // claim the event: another worker instance processing it concurrently skips it (no double emails)
     const claimed = await tx.execute(sql`select id from outbox_events where id = ${e.id} and processed_at is null for update skip locked`);
@@ -209,6 +211,9 @@ async function processEvent(e: Event): Promise<void> {
         })))
         .onConflictDoNothing()
         .returning({ id: notifications.id, userId: notifications.userId });
+      // push goes to devices people subscribed, for each notification they got in the app (unless switched off)
+      const wantPush = inserted.map((n) => n.userId).filter((u) => prefs.find((x) => x.userId === u)?.push !== false);
+      if (wantPush.length) pushes.push({ userIds: wantPush, payload: { title: d.title, body: d.body ?? null, href: d.href, tag: `${d.kind}:${d.entityId}` } });
       const wantEmail = ids.filter((u) => prefs.find((x) => x.userId === u)?.email ?? NOTIFICATION_KINDS[d.kind].emailDefault);
       if (wantEmail.length) {
         const recips = await tx.select({ id: users.id, email: users.email }).from(users).where(and(inArray(users.id, wantEmail), eq(users.status, "active")));
@@ -222,6 +227,13 @@ async function processEvent(e: Event): Promise<void> {
   });
   // send only after the transaction commits; failures are recorded in email_outbox
   for (const m of emails) await sendEmail(m.to, notificationTemplate(m.title, m.body, `${env().APP_URL}${m.href}`));
+  for (const p of pushes) {
+    try {
+      await sendPushToUsers(e.orgId, p.userIds, p.payload);
+    } catch (err) {
+      log.warn("push.delivery_failed", { eventId: e.id, error: (err as Error).message }); // the in-app notification is already there
+    }
+  }
 }
 
 let draining: Promise<number> | null = null;
@@ -316,16 +328,17 @@ export async function getPreferences(ctx: TenantCtx) {
   const rows = await tenantTx(ctx, (tx) => tx.select().from(notificationPreferences).where(and(eq(notificationPreferences.orgId, ctx.principal.orgId), eq(notificationPreferences.userId, ctx.principal.userId))));
   return (Object.keys(NOTIFICATION_KINDS) as NotificationKind[]).map((kind) => {
     const r = rows.find((x) => x.kind === kind);
-    return { kind, label: NOTIFICATION_KINDS[kind].label, email: r?.email ?? NOTIFICATION_KINDS[kind].emailDefault, inApp: r?.inApp ?? true };
+    return { kind, label: NOTIFICATION_KINDS[kind].label, email: r?.email ?? NOTIFICATION_KINDS[kind].emailDefault, inApp: r?.inApp ?? true, push: r?.push ?? true };
   });
 }
 
-export async function savePreferences(ctx: TenantCtx, prefs: { kind: string; email: boolean; inApp: boolean }[]) {
+// `push` is left as it was when not given (the form only shows it once a device is subscribed)
+export async function savePreferences(ctx: TenantCtx, prefs: { kind: string; email: boolean; inApp: boolean; push?: boolean }[]) {
   const valid = prefs.filter((p) => p.kind in NOTIFICATION_KINDS);
   await tenantTx(ctx, async (tx) => {
     for (const p of valid) {
-      await tx.insert(notificationPreferences).values({ orgId: ctx.principal.orgId, userId: ctx.principal.userId, kind: p.kind, email: p.email, inApp: p.inApp })
-        .onConflictDoUpdate({ target: [notificationPreferences.orgId, notificationPreferences.userId, notificationPreferences.kind], set: { email: p.email, inApp: p.inApp } });
+      await tx.insert(notificationPreferences).values({ orgId: ctx.principal.orgId, userId: ctx.principal.userId, kind: p.kind, email: p.email, inApp: p.inApp, push: p.push ?? true })
+        .onConflictDoUpdate({ target: [notificationPreferences.orgId, notificationPreferences.userId, notificationPreferences.kind], set: { email: p.email, inApp: p.inApp, ...(p.push === undefined ? {} : { push: p.push }) } });
     }
     // consent history (Iteration 11): a row whenever the person's choice to get email at all changes
     const wantsEmail = valid.some((p) => p.email);

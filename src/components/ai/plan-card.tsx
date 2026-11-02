@@ -91,6 +91,22 @@ function StepEditor({ s, busy, onSave, onCancel, error, field }: {
   );
 }
 
+const short = (v: string) => (v.length > 140 ? `${v.slice(0, 137)}…` : v);
+// field-by-field differences between the step as first prepared (or before this edit) and after it; a field changed
+// back to how the assistant prepared it drops out of the list
+function stepChanges(before: StepUi, after: StepUi | undefined, earlier: { label: string; from: string; to: string }[] = []) {
+  if (!after) return earlier;
+  const label = (k: string) => before.editable.find((f) => f.key === k)?.label ?? k;
+  const display = (k: string, v: string) => before.editable.find((f) => f.key === k)?.options?.find((o) => o.value === v)?.label ?? v;
+  const out: { label: string; from: string; to: string }[] = [];
+  for (const f of after.editable) {
+    const original = earlier.find((e) => e.label === label(f.key))?.from ?? display(f.key, before.editable.find((b) => b.key === f.key)?.value ?? "");
+    const now = display(f.key, f.value);
+    if (original !== now) out.push({ label: label(f.key), from: original, to: now });
+  }
+  return out;
+}
+
 export function PlanCard({ plan: initial, orgSlug, onChange }: { plan: PlanUi; orgSlug: string; onChange?: (p: PlanUi) => void }) {
   const router = useRouter();
   const [plan, setPlan] = useState<PlanUi>(initial);
@@ -98,6 +114,8 @@ export function PlanCard({ plan: initial, orgSlug, onChange }: { plan: PlanUi; o
   const [error, setError] = useState<{ message: string; field?: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
+  // what the person changed in each step, against what the assistant first prepared (kept across several edits)
+  const [changes, setChanges] = useState<Record<string, { label: string; from: string; to: string }[]>>({});
   const [typed, setTyped] = useState("");
   const ackId = useId();
   const typedId = useId();
@@ -175,7 +193,26 @@ export function PlanCard({ plan: initial, orgSlug, onChange }: { plan: PlanUi; o
             {editing === s.id ? (
               <StepEditor s={s} busy={busy === "edit"} error={error?.message ?? null} field={error?.field ?? null}
                 onCancel={() => { setEditing(null); setError(null); }}
-                onSave={async (edits) => { if (await run("edit", () => revisePlanStepAction({ orgSlug, planId: plan.id, stepId: s.id, edits }))) setEditing(null); }} />
+                onSave={async (edits) => {
+                  let next: PlanUi | undefined;
+                  const ok = await run("edit", async () => { const r = await revisePlanStepAction({ orgSlug, planId: plan.id, stepId: s.id, edits }); next = r.plan ?? undefined; return r; });
+                  if (!ok) return;
+                  setEditing(null);
+                  setChanges((c) => ({ ...c, [s.id]: stepChanges(s, next?.steps.find((x) => x.id === s.id), c[s.id]) }));
+                }} />
+            ) : null}
+            {changes[s.id]?.length && editing !== s.id ? (
+              <div className="mt-2 rounded-[var(--radius-md)] border border-accent/30 bg-accent-soft/30 px-3 py-2 text-[12px]" data-testid="plan-edits">
+                <p className="font-medium text-accent">You changed</p>
+                <ul className="mt-0.5 space-y-0.5">{changes[s.id].map((c) => (
+                  <li key={c.label} className="break-words">
+                    <span className="text-muted">{c.label}: </span>
+                    <del className="text-faint" title={c.from}>{short(c.from) || "(empty)"}</del>
+                    <span aria-hidden> → </span><span className="sr-only"> changed to </span>
+                    <ins className="font-medium no-underline" title={c.to}>{short(c.to) || "(empty)"}</ins>
+                  </li>
+                ))}</ul>
+              </div>
             ) : null}
             <StepResultLine s={s} />
           </li>

@@ -159,9 +159,15 @@ export async function listSpaces(ctx: TenantCtx, opts: { propertyId?: string; ki
   });
 }
 
-// visitor spaces at a property that nobody holds right now (for check-in)
-export async function freeVisitorSpaces(tx: Tx, orgId: string, propertyId: string, until: Date) {
+// how long a visitor's parking lasts from check-in: until the end of their visit, or two hours when that has passed
+export function visitorPermitUntil(expectedUntil: Date, now = new Date()): Date {
+  return expectedUntil > now ? expectedUntil : new Date(now.getTime() + 2 * 3_600_000);
+}
+
+// visitor spaces at a property that nobody holds for the parking a check-in now would give (for check-in)
+export async function freeVisitorSpaces(tx: Tx, orgId: string, propertyId: string, expectedUntil: Date) {
   const now = new Date();
+  const until = visitorPermitUntil(expectedUntil, now); // never before now: a late visitor's window would be an invalid range
   return tx.select({ id: parkingSpaces.id, code: parkingSpaces.code }).from(parkingSpaces)
     .where(and(eq(parkingSpaces.orgId, orgId), eq(parkingSpaces.propertyId, propertyId), eq(parkingSpaces.kind, "visitor"), eq(parkingSpaces.status, "available"),
       sql`not exists (select 1 from parking_permits pp where pp.space_id = parking_spaces.id and pp.status = 'active'
@@ -310,7 +316,7 @@ export async function issueVisitorPermitTx(tx: Tx, ctx: TenantCtx, v: { id: stri
   if (!s || s.propertyId !== v.propertyId || s.kind !== "visitor") throw new ValidationError("Choose a visitor space at this property.", "spaceId");
   if (s.status !== "available") throw new ValidationError(`Space ${s.code} is out of service.`, "spaceId");
   const now = new Date();
-  const until = v.expectedUntil > now ? v.expectedUntil : new Date(now.getTime() + 2 * 3_600_000);
+  const until = visitorPermitUntil(v.expectedUntil, now);
   const number = await nextNumber(tx, p.orgId, "parking_permit");
   try {
     // a savepoint keeps the visitor transaction usable when the space was just taken

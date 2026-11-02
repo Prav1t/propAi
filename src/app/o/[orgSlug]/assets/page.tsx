@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listSavedViews } from "@/server/modules/views/service";
 import { getOrgContext, orNotFound, sp } from "@/server/org-context";
 import { canManageAssets, canReadAssets, facilityStats, listAssets } from "@/server/modules/assets/service";
 import { listPropertyOptions } from "@/server/modules/portfolio/service";
-import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Stat, Table, Td, Th, ListEmpty, hasFilters } from "@/components/ui/primitives";
 import { LinkButton } from "@/components/ui/button";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
@@ -17,6 +18,7 @@ export default async function AssetsPage({ params, searchParams }: PageProps<"/o
   const { orgSlug } = await params;
   const q = await searchParams;
   const { ctx, principal } = await getOrgContext(orgSlug);
+  const savedViews = await listSavedViews(ctx, "assets");
   if (!canReadAssets(principal)) notFound();
   const base = `/o/${orgSlug}/assets`;
   const [data, stats, props] = await Promise.all([
@@ -60,22 +62,22 @@ export default async function AssetsPage({ params, searchParams }: PageProps<"/o
         </>
       ) : null}
       <Panel>
-        <FilterBar searchPlaceholder="Name, tag, make, model or serial…" filters={[
+        <FilterBar saved={{ orgSlug, page: "assets", views: savedViews }} searchPlaceholder="Name, tag, make, model or serial…" filters={[
           ...(props.length > 1 ? [{ name: "property", label: "Property", options: props.map((p) => ({ value: p.id, label: p.name })) }] : []),
           { name: "category", label: "Category", options: opts(ASSET_CATEGORY) },
           { name: "status", label: "Status", allLabel: "In use", options: [...Object.entries(ASSET_STATUS).map(([value, v]) => ({ value, label: v.label }))] },
         ]} />
-        {data.rows.length === 0 ? <EmptyState title="No assets match" /> : (
-          <Table>
+        {data.rows.length === 0 ? <ListEmpty title="No assets yet" filtered={hasFilters(q)} clearHref={base} create={canManageAssets(principal) ? { href: `${base}/new`, label: "Add asset" } : null}>Track equipment like elevators, boilers and gates to schedule preventive maintenance and record downtime.</ListEmpty> : (
+          <Table cards>
             <thead><tr><Th>Asset</Th><Th className="hidden md:table-cell">Where</Th><Th>Status</Th><Th className="hidden md:table-cell">Next PM</Th><Th className="text-right">Open WOs</Th></tr></thead>
             <tbody>{data.rows.map((a) => (
               <tr key={a.id} className="hover:bg-subtle/60">
                 <Td><Link href={`${base}/${a.id}`} className="font-medium hover:underline">{a.name}</Link>
                   <div className="text-xs text-faint">{[ASSET_CATEGORY[a.category], a.tag, a.criticality !== "medium" ? `${CRITICALITY[a.criticality]?.label} criticality` : null].filter(Boolean).join(" · ")}</div></Td>
-                <Td className="hidden text-[13px] md:table-cell">{a.propertyName}{a.buildingName ? ` · ${a.buildingName}` : ""}<div className="text-xs text-faint">{a.location}</div></Td>
-                <Td><Badge tone={ASSET_STATUS[a.status]?.tone}>{ASSET_STATUS[a.status]?.label}</Badge>{a.reactive90d >= 3 ? <div className="mt-1 text-xs text-warning">{a.reactive90d} requests in 90 days</div> : null}</Td>
-                <Td className="hidden text-[13px] md:table-cell">{a.nextPmOn ?? "—"}</Td>
-                <Td className="text-right tabular-nums">{a.openWorkOrders || <span className="text-faint">0</span>}</Td>
+                <Td label="Where" className="hidden text-[13px] md:table-cell">{a.propertyName}{a.buildingName ? ` · ${a.buildingName}` : ""}<div className="text-xs text-faint">{a.location}</div></Td>
+                <Td label="Status"><Badge tone={ASSET_STATUS[a.status]?.tone}>{ASSET_STATUS[a.status]?.label}</Badge>{a.reactive90d >= 3 ? <div className="mt-1 text-xs text-warning">{a.reactive90d} requests in 90 days</div> : null}</Td>
+                <Td label="Next PM" className="hidden text-[13px] md:table-cell">{a.nextPmOn ?? "—"}</Td>
+                <Td label="Open WOs" className="text-right tabular-nums">{a.openWorkOrders || <span className="text-faint">0</span>}</Td>
               </tr>
             ))}</tbody>
           </Table>

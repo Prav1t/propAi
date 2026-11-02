@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { recordView } from "@/server/modules/views/service";
 import Link from "next/link";
 import { getOrgContext, orNotFound } from "@/server/org-context";
 import { getProperty } from "@/server/modules/portfolio/service";
@@ -16,6 +18,7 @@ export default async function PropertyPage({ params }: PageProps<"/o/[orgSlug]/p
   const { orgSlug, id } = await params;
   const { ctx } = await getOrgContext(orgSlug);
   const d = await orNotFound(getProperty(ctx, id));
+  after(() => recordView(ctx, { type: "property", id, title: d.property.name, href: `/o/${orgSlug}/properties/${id}` }).catch(() => {})); // command palette "recent"
   const p = d.property;
   const base = `/o/${orgSlug}`;
   const units = d.buildings.reduce((a, b) => a + b.unitCount, 0);

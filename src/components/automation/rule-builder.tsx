@@ -10,6 +10,7 @@ import {
 } from "@/lib/automation";
 import { PRIORITY, WO_STATUS } from "@/lib/ops-labels";
 import { cn } from "@/lib/cn";
+import { FlowView } from "./flow-view";
 
 export type BuilderOptions = {
   properties: { id: string; name: string }[]; orgWide: boolean;
@@ -51,6 +52,7 @@ export function RuleBuilder({ orgSlug, action, initial, initialEnabled, options,
   dryRun: (slug: string, ruleJson: string, eventId: string | null) => Promise<{ ok: true; result: DryRunResult } | { ok: false; error: string }>;
   candidates: (slug: string, trigger: string, propertyId: string | null) => Promise<{ ok: true; events: { id: string; label: string; at: string }[] } | { ok: false; error: string }>;
 }) {
+  const [asFlow, setAsFlow] = useState(true);
   const [rule, setRule] = useState<WorkflowInput>(initial);
   const [state, formAction] = useActionState(action, initialActionState);
   const [clientError, setClientError] = useState<string | null>(null);
@@ -248,9 +250,14 @@ export function RuleBuilder({ orgSlug, action, initial, initialEnabled, options,
 
       <aside className="space-y-4">
         <section className={cn(card, "p-4")} aria-labelledby="rb-summary">
-          <h2 id="rb-summary" className="text-[13px] font-semibold">In plain words</h2>
-          <p className="mt-2 text-[13px]">{summary.when}{summary.conditions.length ? `, if ${summary.conditions.join(" and ")}` : ""}:</p>
-          <ol className="mt-1 list-decimal space-y-1 pl-5 text-[13px] text-muted">{summary.actions.map((s, i) => <li key={i}>{s}</li>)}</ol>
+          <div className="flex items-center justify-between gap-2">
+            <h2 id="rb-summary" className="text-[13px] font-semibold">{asFlow ? "As a flow" : "In plain words"}</h2>
+            <button type="button" onClick={() => setAsFlow((v) => !v)} className="text-[12px] text-accent underline-offset-2 hover:underline">{asFlow ? "Show as a sentence" : "Show as a flow"}</button>
+          </div>
+          {asFlow ? <div className="-mx-4 -mb-4"><FlowView when={summary.when} conditions={summary.conditions} steps={summary.steps} /></div> : <>
+            <p className="mt-2 text-[13px]">{summary.when}{summary.conditions.length ? `, if ${summary.conditions.join(" and ")}` : ""}:</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5 text-[13px] text-muted">{summary.actions.map((s, i) => <li key={i}>{s}</li>)}</ol>
+          </>}
         </section>
         <DryRunPanel key={`${rule.trigger}:${rule.propertyId ?? ""}`} orgSlug={orgSlug} ruleJson={ruleJson} trigger={rule.trigger} propertyId={rule.propertyId} dryRun={dryRun} candidates={candidates} />
       </aside>
@@ -264,9 +271,9 @@ function RecipientFields({ r, onChange, options, members, idp }: { r: Recipients
     <fieldset className="space-y-2">
       <legend className={label}>Who</legend>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
-        <label className="flex items-center gap-1.5"><input type="checkbox" checked={r.onCall} onChange={(e) => onChange({ ...r, onCall: e.target.checked })} /> Whoever is on call</label>
-        <label className="flex items-center gap-1.5"><input type="checkbox" checked={r.submitter} onChange={(e) => onChange({ ...r, submitter: e.target.checked })} /> The person who reported it</label>
-        <label className="flex items-center gap-1.5"><input type="checkbox" checked={r.assignee} onChange={(e) => onChange({ ...r, assignee: e.target.checked })} /> Whoever is assigned</label>
+        <label className="flex min-h-6 items-center gap-1.5 pointer-coarse:min-h-11"><input type="checkbox" className="size-4 accent-[var(--color-accent)]" checked={r.onCall} onChange={(e) => onChange({ ...r, onCall: e.target.checked })} /> Whoever is on call</label>
+        <label className="flex min-h-6 items-center gap-1.5 pointer-coarse:min-h-11"><input type="checkbox" className="size-4 accent-[var(--color-accent)]" checked={r.submitter} onChange={(e) => onChange({ ...r, submitter: e.target.checked })} /> The person who reported it</label>
+        <label className="flex min-h-6 items-center gap-1.5 pointer-coarse:min-h-11"><input type="checkbox" className="size-4 accent-[var(--color-accent)]" checked={r.assignee} onChange={(e) => onChange({ ...r, assignee: e.target.checked })} /> Whoever is assigned</label>
       </div>
       <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Everyone with these roles">
         <span className="mr-1 text-[12px] text-faint">Everyone with the role:</span>

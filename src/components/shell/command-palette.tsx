@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { Icon } from "./icons";
+import { useFocusTrap } from "@/lib/use-focus-trap";
 
 export type Command = { label: string; href: string; group: string; keywords?: string };
 type Hit = { type: string; id: string; title: string; subtitle: string; href: string };
@@ -11,7 +12,9 @@ type Hit = { type: string; id: string; title: string; subtitle: string; href: st
 const TYPE_LABEL: Record<string, string> = { property: "Property", building: "Building", unit: "Unit", resident: "Resident", vendor: "Vendor", staff: "Staff" };
 
 // global Cmd/Ctrl-K palette: navigation + actions + permission-aware record search
-export function CommandPalette({ commands, search, searchPage, ask }: { commands: Command[]; search: (q: string) => Promise<Hit[]>; searchPage: string; ask?: { href: string; name: string } | null }) {
+export function CommandPalette({ commands, recent = [], search, searchPage, ask }: {
+  commands: Command[]; recent?: Command[]; search: (q: string) => Promise<Hit[]>; searchPage: string; ask?: { href: string; name: string } | null;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -19,6 +22,7 @@ export function CommandPalette({ commands, search, searchPage, ask }: { commands
   const [active, setActive] = useState(0);
   const [pending, start] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
   const listId = useId();
 
@@ -33,9 +37,6 @@ export function CommandPalette({ commands, search, searchPage, ask }: { commands
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 0);
-  }, [open]);
 
   const runSearch = useCallback((value: string) => {
     const mine = ++seq.current;
@@ -55,6 +56,11 @@ export function CommandPalette({ commands, search, searchPage, ask }: { commands
     const t = q.trim().toLowerCase();
     return (t ? commands.filter((c) => `${c.label} ${c.keywords ?? ""}`.toLowerCase().includes(t)) : commands).slice(0, 8);
   }, [q, commands]);
+  // records opened recently: shown first before typing, and among the matches while typing
+  const recentShown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return (t ? recent.filter((r) => r.label.toLowerCase().includes(t)) : recent).slice(0, t ? 4 : 6);
+  }, [q, recent]);
 
   // questions ("which vendor…?", "show overdue…") get an "Ask the assistant" option first
   const question = q.trim();
@@ -62,9 +68,11 @@ export function CommandPalette({ commands, search, searchPage, ask }: { commands
     ? [{ key: "ask", label: `Ask ${ask.name}: “${question.length > 60 ? `${question.slice(0, 57)}…` : question}”`, sub: "Assistant", href: `${ask.href}?q=${encodeURIComponent(question)}` }]
     : [];
   const looksLikeQuestion = /\?$|^(who|what|which|when|where|how|why|show|list|find|summari[sz]e|give|tell|is|are|do|does|any)\b/i.test(question);
-  const records = [...filtered.map((c) => ({ key: `c:${c.href}`, label: c.label, sub: c.group, href: c.href })), ...hits.map((h) => ({ key: `h:${h.type}:${h.id}`, label: h.title, sub: `${TYPE_LABEL[h.type]} · ${h.subtitle}`, href: h.href }))];
+  const records = [...recentShown.map((r) => ({ key: `r:${r.href}`, label: r.label, sub: `Recent · ${r.group}`, href: r.href })),
+    ...filtered.map((c) => ({ key: `c:${c.href}`, label: c.label, sub: c.group, href: c.href })), ...hits.filter((h) => !recentShown.some((r) => r.href === h.href)).map((h) => ({ key: `h:${h.type}:${h.id}`, label: h.title, sub: `${TYPE_LABEL[h.type]} · ${h.subtitle}`, href: h.href }))];
   const items = looksLikeQuestion ? [...askItem, ...records] : [...records, ...askItem];
-  const close = () => { setOpen(false); setQ(""); setHits([]); setActive(0); };
+  const close = useCallback(() => { setOpen(false); setQ(""); setHits([]); setActive(0); }, []);
+  useFocusTrap(dialogRef, open, { onEscape: close, initial: inputRef });
   const go = (href: string) => { close(); router.push(href); };
 
   return (
@@ -76,7 +84,7 @@ export function CommandPalette({ commands, search, searchPage, ask }: { commands
       </button>
       {open ? createPortal(
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[12vh]" onMouseDown={close}>
-          <div role="dialog" aria-modal="true" aria-label="Command palette" className="w-full max-w-xl overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Command palette" className="w-full max-w-xl overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 border-b border-border px-3">
               <Icon name="search" className="size-4 text-faint" />
               <input

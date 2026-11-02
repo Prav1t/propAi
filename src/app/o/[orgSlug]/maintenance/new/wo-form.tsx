@@ -1,30 +1,60 @@
 "use client";
+import { PhotoPicker } from "@/components/ui/photo-picker";
 import { useActionState, useState } from "react";
 import type { ActionState } from "@/lib/action-state";
 import { initialActionState } from "@/lib/action-state";
 import { Field, FormAlert, Input, Select } from "@/components/ui/form";
 import { SubmitButton } from "@/components/ui/button";
+import { draftFromForm, draftsAvailable, isNetworkError, saveDraft } from "@/lib/drafts";
+
+// random reference for this request (crypto.randomUUID needs a secure context; fall back to random bytes)
+const newRef = () => (typeof crypto.randomUUID === "function" ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join(""));
 
 type Opt = { value: string; label: string };
 const area = "block w-full rounded-[var(--radius-md)] border border-border-strong bg-surface px-3 py-2 text-sm placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20";
 
 // one form for residents (their unit) and staff (any building/unit in scope); photos upload with the request
-export function WorkOrderForm({ action, mode, units, buildings, categories, priorities, assets = [], defaults = {} }: {
+export function WorkOrderForm({ action, mode, units, buildings, categories, priorities, assets = [], defaults = {}, drafts }: {
   action: (s: ActionState, fd: FormData) => Promise<ActionState>;
   mode: "resident" | "staff"; units: Opt[]; buildings: Opt[]; categories: Opt[]; priorities: Opt[];
   assets?: Opt[]; defaults?: { assetId?: string; buildingId?: string; category?: string };
+  drafts?: { userId: string; orgSlug: string }; // keep the request on this device when there's no connection
 }) {
-  const [state, formAction] = useActionState(action, initialActionState);
+  // one reference per request: a double submit, or a draft sent after the first attempt did arrive, makes one request
+  const [clientRef, setClientRef] = useState(newRef);
+  const keepOnDevice = async (fd: FormData): Promise<ActionState> => {
+    await saveDraft(draftFromForm(fd, { id: clientRef, userId: drafts!.userId, orgSlug: drafts!.orgSlug, kind: "work_order" }));
+    window.dispatchEvent(new Event("drafts-changed"));
+    return { ok: true, message: "You're offline, so this request is saved on this device. It will be sent as soon as you're back online.", data: { draft: true } };
+  };
+  const submit = async (prev: ActionState, fd: FormData): Promise<ActionState> => {
+    const offlineCapable = !!drafts && draftsAvailable();
+    if (offlineCapable && !navigator.onLine) return keepOnDevice(fd);
+    try {
+      return await action(prev, fd);
+    } catch (e) {
+      if (offlineCapable && isNetworkError(e)) return keepOnDevice(fd);
+      throw e;
+    }
+  };
+  const [state, formAction] = useActionState(submit, initialActionState);
+  const savedOffline = !!(state.data as { draft?: boolean } | undefined)?.draft;
   const v = (k: string, d = "") => state.values?.[k] ?? d;
   const err = state.fieldErrors ?? {};
   const [emergency, setEmergency] = useState(v("isEmergency") === "on");
   // React resets the form after each action; keep the warning in sync with the echoed checkbox value
   const echoed = state.values?.isEmergency === "on";
   const [seen, setSeen] = useState(state);
-  if (seen !== state) { setSeen(state); setEmergency(echoed); }
+  if (seen !== state) {
+    setSeen(state);
+    setEmergency(echoed);
+    if (savedOffline) setClientRef(newRef()); // the next request is a different one
+  }
   return (
     <form action={formAction} className="space-y-5" noValidate>
+      <input type="hidden" name="clientRef" value={clientRef} />
       <FormAlert>{state.error}</FormAlert>
+      {savedOffline ? <FormAlert kind="info">{state.message}</FormAlert> : null}
       <div className="grid gap-4 sm:grid-cols-2">
         {mode === "resident" ? (
           <Field label="Unit" name="unitId" error={err.unitId} className="sm:col-span-2">
@@ -92,12 +122,7 @@ export function WorkOrderForm({ action, mode, units, buildings, categories, prio
         </Field>
       </fieldset>
 
-      <div className="space-y-1.5">
-        <label htmlFor="wo-files" className="block text-[13px] font-medium">Photos or video (optional)</label>
-        <input id="wo-files" name="files" type="file" multiple accept="image/*,application/pdf,video/mp4,video/quicktime"
-          className="block w-full text-[13px] file:mr-3 file:rounded-[var(--radius-md)] file:border file:border-border-strong file:bg-surface file:px-3 file:py-1.5 file:text-[13px]" />
-        <p className="text-xs text-faint">Up to 5 files · images 10 MB, video 25 MB.</p>
-      </div>
+      <PhotoPicker id="wo-files" label="Photos or video (optional)" hint="Up to 5 files · images 10 MB, video 25 MB." />
       <SubmitButton pendingLabel="Submitting…">Submit request</SubmitButton>
     </form>
   );
