@@ -6,7 +6,7 @@ import { z } from "zod";
 import { db, withContext, type Tx } from "../db/client";
 import {
   aiConversations, aiMessages, auditLogs, bookings, complaints, consents, files, legalHolds, memberships, messages, messageThreads,
-  notificationPreferences, notifications, packages, pushSubscriptions, recentViews, savedViews, parkingPermits, parkingViolations, privacyRequests, residents, retentionPolicies,
+  leases, rentCharges, notificationPreferences, notifications, packages, pushSubscriptions, recentViews, savedViews, parkingPermits, parkingViolations, privacyRequests, residents, retentionPolicies,
   roles, sessions, unitOccupancies, units, users, vehicles, visitors, workOrders,
 } from "../db/schema";
 import { authorize, NotFoundError } from "../authz/authorize";
@@ -103,6 +103,10 @@ export async function exportPerson(ctx: TenantCtx, residentId: string): Promise<
         .from(complaints).where(and(eq(complaints.orgId, orgId), or(eq(complaints.residentId, residentId), uid ? eq(complaints.submittedByUserId, uid) : sql`false`))),
       bookings: await tx.select({ number: bookings.number, startsAt: bookings.startsAt, endsAt: bookings.endsAt, status: bookings.status, purpose: bookings.purpose, guests: bookings.guests })
         .from(bookings).where(and(eq(bookings.orgId, orgId), or(eq(bookings.residentId, residentId), uid ? eq(bookings.bookedByUserId, uid) : sql`false`))),
+      leases: await tx.select({ unit: units.number, startsOn: leases.startsOn, endsOn: leases.endsOn, rentCents: leases.rentCents, depositCents: leases.depositCents, status: leases.status, noticeGivenOn: leases.noticeGivenOn, moveOutOn: leases.moveOutOn, notes: leases.notes })
+        .from(leases).innerJoin(units, eq(units.id, leases.unitId)).where(and(eq(leases.orgId, orgId), eq(leases.residentId, residentId))),
+      rent: await tx.select({ period: rentCharges.period, amountCents: rentCharges.amountCents, dueOn: rentCharges.dueOn, paidCents: rentCharges.paidCents, paidOn: rentCharges.paidOn })
+        .from(rentCharges).innerJoin(leases, eq(leases.id, rentCharges.leaseId)).where(and(eq(rentCharges.orgId, orgId), eq(leases.residentId, residentId))),
       packages: await tx.select({ carrier: packages.carrier, trackingNumber: packages.trackingNumber, status: packages.status, receivedAt: packages.receivedAt, pickedUpAt: packages.pickedUpAt })
         .from(packages).where(and(eq(packages.orgId, orgId), eq(packages.residentId, residentId))),
       visitors: await tx.select({ name: visitors.name, kind: visitors.kind, status: visitors.status, expectedFrom: visitors.expectedFrom, checkedInAt: visitors.checkedInAt })
@@ -202,6 +206,10 @@ export async function erasePerson(ctx: TenantCtx, residentId: string, input: { r
         inArray(memberships.roleId, tx.select({ id: roles.id }).from(roles).where(eq(roles.category, "resident"))),
       )).returning({ id: memberships.id }));
     }
+    // lease and rent records are kept (they are the landlord's financial records) with the tenant anonymised; free-text
+    // notes, which may say anything about the person, are removed
+    result.leaseNotes = n(await tx.update(leases).set({ notes: null }).where(and(eq(leases.orgId, orgId), eq(leases.residentId, residentId), sql`${leases.notes} is not null`)).returning({ id: leases.id }));
+    await tx.update(rentCharges).set({ note: null }).where(and(eq(rentCharges.orgId, orgId), inArray(rentCharges.leaseId, tx.select({ id: leases.id }).from(leases).where(eq(leases.residentId, residentId)))));
     // staff who opened this person's record no longer see their name in "recent"
     await forgetRecent(tx, orgId, "resident", residentId);
     result.consents = n(await tx.delete(consents).where(and(eq(consents.orgId, orgId), or(eq(consents.residentId, residentId), uid ? eq(consents.userId, uid) : sql`false`))).returning({ id: consents.id }));

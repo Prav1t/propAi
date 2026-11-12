@@ -21,7 +21,9 @@ const PLATFORM_TABLES = ["api_keys", "api_idempotency", "webhook_endpoints", "we
   // iteration 11: security and privacy
   "org_security_policies", "sso_connections", "sso_domains", "privacy_requests", "legal_holds", "retention_policies", "consents",
   // iteration 12: per-person saved views, recently viewed records and push devices (owner-only within the org too)
-  "saved_views", "recent_views", "push_subscriptions"];
+  "saved_views", "recent_views", "push_subscriptions",
+  // iteration 13: governance and leasing (seeded for the first tenant only)
+  "meetings", "meeting_agenda_items", "meeting_motions", "meeting_votes", "leases", "rent_charges"];
 const TENANT_TABLES = ["portfolios", "properties", "buildings", "floors", "units", "residents", "unit_occupancies", "membership_scopes", "memberships", "invitations", "audit_logs", "vendors", "vendor_contacts", "vendor_properties", "staff_profiles", ...OPS_TABLES, ...PLATFORM_TABLES];
 
 let A: string; // Pacific Properties

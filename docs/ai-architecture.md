@@ -280,3 +280,11 @@ Then two rankings run in one transaction — cosine similarity over the HNSW ind
 - **Plan diff:** when someone edits a prepared plan, the card lists *You changed* with the old value struck through and the new one, so the approver sees what differs from what the assistant prepared.
 - **Keyboard:** `/` focuses the question box; `?` lists the app's shortcuts.
 
+## 19. Governance and leasing tools (Iteration 13)
+
+- **`search_meetings`** (class 1): upcoming or past meetings, or the motions still open for voting. Offered to people with `meeting.read` or `meeting.manage`.
+- **`search_leases`** (class 1): leases in force, with rent overdue, ending within 60 days, or ended, plus totals (leases in force, monthly rent roll, rent overdue). Offered to people with `lease.read` or `lease.manage`. Every figure comes from recorded charges and payments.
+- **Demo mode** understands questions such as "Which motions are open for voting?", "When is the next council meeting?", "Which tenants are behind on rent?" and "Which leases end soon?".
+- **Evaluation:** four new cases (36 in total) cover the two tools, property scope (a manager of other properties sees no strata meetings) and refusal for residents.
+- **Not built:** the assistant doesn't draft agendas or minutes, cast votes, or record payments. Those stay with people.
+

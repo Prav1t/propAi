@@ -17,44 +17,23 @@ Each iteration must end runnable, building, tested, documented, with demo data. 
 | 10 | Billing + integrations | ✅ Done | Plans as configuration with entitlements and limits, 14-day trials, read-only mode on lapse, usage metering, billing provider abstraction (labelled development provider + Stripe adapter, idempotent events), scoped API keys, REST API v1 with OpenAPI + reference page, signed webhooks with retries/auto-disable/replay (SSRF-safe), Slack/Teams/Twilio/Resend/SendGrid, feature flags, platform console |
 | 11 | Security hardening | ✅ Done | Threat model + finding log (13 findings fixed, each with a test), IDOR/escalation/tenant/injection suites, OIDC SSO (verified domains, JIT, PKCE, signature checks), org-enforced MFA/SSO, recent-auth for sensitive changes, one-time TOTP, absolute sessions, trusted-proxy IPs, Redis rate limits, nonce CSP + cross-site write guard, tamper-evident audit chain, key rotation, privacy export/erasure/legal holds/retention/consent, dependency + secret scanning, SBOM |
 | 12 | UX polish | ✅ Done | Axe audit of every page per role (0 serious/critical, desktop + phone), keyboard and focus fixes, skeletons, streamed dashboard sections, error pages with references, real 404s, phone tab bars, 44 px targets, list cards, camera capture, installable app with offline page, offline maintenance drafts sent once, web push (VAPID, per device, per kind), voice input (speech-to-text provider or browser), assistant follow-ups and plan diff, saved views, bulk work order changes, palette recents, shortcuts, rule flow view, custom role editor, signed-in members |
-| 13 | Production readiness | ⏭ Next | Prod Docker, migrations runbook, backups, monitoring, deployment guide |
+| 13 | Production readiness | ✅ Done | Start-up configuration check, health probes, metrics, error tracking, worker turn-taking and clean shutdown, CSP reports, backup and restore drill, load test and index, production compose with TLS, deployment / operations / observability docs, security checklist. Also: strata meetings and votes, leases and rent tracking, the public landing page |
 
-Iteration reports: [1](iterations/iteration-01.md) · [2](iterations/iteration-02.md) · [3](iterations/iteration-03.md) · [4](iterations/iteration-04.md) · [5](iterations/iteration-05.md) · [6](iterations/iteration-06.md) · [7](iterations/iteration-07.md) · [8](iterations/iteration-08.md) · [9](iterations/iteration-09.md) · [10](iterations/iteration-10.md) · [11](iterations/iteration-11.md) · [12](iterations/iteration-12.md) · [Accessibility audit](accessibility.md) · Security: [threat model](security/threat-model.md)
+Iteration reports: [1](iterations/iteration-01.md) · [2](iterations/iteration-02.md) · [3](iterations/iteration-03.md) · [4](iterations/iteration-04.md) · [5](iterations/iteration-05.md) · [6](iterations/iteration-06.md) · [7](iterations/iteration-07.md) · [8](iterations/iteration-08.md) · [9](iterations/iteration-09.md) · [10](iterations/iteration-10.md) · [11](iterations/iteration-11.md) · [12](iterations/iteration-12.md) · [13](iterations/iteration-13.md) · [What is and isn't built](spec-coverage.md) · [Accessibility audit](accessibility.md) · Security: [threat model](security/threat-model.md)
 
-## Iteration 13 — detailed plan (production readiness)
+## After Iteration 13
 
-Goal: someone other than the authors can deploy, operate, back up, restore and monitor the platform from the documentation, and the production configuration is safe by default.
+The planned iterations are done. What stands between this and a paying customer is mostly not code. In order:
 
-1. **Build and run:**
-   - the production Docker image checked on a machine with Docker (image size, non-root user, read-only filesystem where possible, healthcheck);
-   - `docker compose` for a single-host deployment with the worker as its own service;
-   - a release step that runs migrations before the new version takes traffic.
-2. **Configuration:** start-up validation that refuses unsafe production settings, covering:
-   - development flags;
-   - missing keys;
-   - HTTP origins;
-   - mock billing without its override;
-   - missing VAPID or trusted-proxy settings, reported as warnings.
+1. **Run it for real once:** build the Docker images, deploy to a staging host with a real domain, real email, a real model key and Stripe in test mode, and walk the demo script end to end.
+2. **Name it:** replace the placeholders in `src/config/brand.ts`, the logo and the icons.
+3. **Legal:** terms, privacy notice, data processing agreement, and a decision on where data is hosted.
+4. **An independent security test** before holding real resident data.
+5. **A pilot** with one building, with screen-reader and phone testing by real users.
 
-   Every variable is documented in one place.
-3. **Database operations:**
-   - a migrations runbook (forward-only, expand/contract for risky changes, rollback by restore);
-   - backup and point-in-time recovery guidance for managed Postgres;
-   - a restore drill script that restores into a scratch database and runs the integrity checks: the audit-chain verify, RLS on every tenant table, row counts.
-4. **Observability:**
-   - structured logs with request ids end to end, including the worker and the assistant;
-   - a metrics endpoint for request latency, error rates, queue depth (outbox, notifications, webhooks, indexing), worker lag and AI usage;
-   - example dashboards and alerts;
-   - an error-tracking adapter (Sentry-compatible) behind an interface.
-5. **Health and resilience:**
-   - liveness and readiness checks (database, Redis, storage), graceful shutdown that finishes in-flight work, and worker leases that survive restarts;
-   - load tests on the busiest pages and the API with a large seeded portfolio, with the slowest queries indexed.
-6. **Security configuration:**
-   - a production checklist (TLS, HSTS preload decision, cookie settings, CSP report endpoint, secret manager, key rotation schedule, admin MFA);
-   - dependency update policy.
-7. **Documentation:** a deployment guide (single host, and a managed-cloud reference), an operations runbook (incidents, rotating keys, restoring, scaling the worker) and an upgrade guide.
+Then the product gaps, listed in [`spec-coverage.md`](spec-coverage.md).
 
-Carried over (outside Iteration 13 unless listed above):
+Carried over (not built):
 
 - **SMS notification delivery:** consent records exist now; it still needs per-person phone numbers and quiet hours.
 - **Google/Outlook calendar sync:** the `CalendarSync` contract exists; the implementation doesn't.
@@ -68,3 +47,8 @@ Carried over (outside Iteration 13 unless listed above):
 - **Offline inspection evidence** and offline caching of recently viewed pages.
 - **Bulk actions on packages**, and column choices in saved views.
 - **Streaming the analytics page** section by section.
+- **Rental listings and applications**, online rent payment, late fees, pro-rated rent, and a resident's view of their own lease.
+- **Owner voting at general meetings**, proxies and meeting notices; the assistant drafting agendas and minutes.
+- **Storage lockers**, product analytics events, and text-to-speech.
+- **Distributed tracing**, and page-latency metrics from inside the app.
+- **Malware scanning of uploads** (the hook exists; no scanner is connected).

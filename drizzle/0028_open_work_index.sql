@@ -1,0 +1,1 @@
+CREATE INDEX "work_orders_open_idx" ON "work_orders" USING btree ("org_id","property_id","created_at") WHERE "work_orders"."status" in ('new','acknowledged','assigned','scheduled','in_progress','awaiting_vendor','awaiting_resident');

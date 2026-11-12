@@ -15,6 +15,9 @@ export type SystemRole = {
 // org-level administration stays with org admins (audit log spans every property)
 const exceptOrgAdmin = (p: Permission) => !["org.settings.manage", "member.manage", "ai.settings.manage", "audit.read", "billing.manage", "api.manage", "integration.manage", "security.manage", "privacy.manage", "role.manage"].includes(p);
 
+// managers run meetings; only council members vote
+const notCouncilOnly = (p: Permission) => p !== "meeting.vote";
+
 const OPS_READ: Permission[] = [
   "org.read", "member.read", "portfolio.read", "property.read", "unit.read", "resident.read",
   "workorder.read", "vendor.read", "task.read", "inspection.read", "incident.read", "complaint.read",
@@ -37,12 +40,12 @@ export const SYSTEM_ROLES: SystemRole[] = [
   {
     key: "portfolio_manager", name: "Portfolio Manager", category: "staff", scopeLevel: "scoped",
     description: "Manages every property in assigned portfolios.",
-    permissions: ALL_PERMISSIONS.filter(exceptOrgAdmin),
+    permissions: ALL_PERMISSIONS.filter(exceptOrgAdmin).filter(notCouncilOnly),
   },
   {
     key: "property_manager", name: "Property Manager", category: "staff", scopeLevel: "scoped",
     description: "Manages assigned properties end to end.",
-    permissions: ALL_PERMISSIONS.filter(exceptOrgAdmin).filter((p) => p !== "portfolio.manage"),
+    permissions: ALL_PERMISSIONS.filter(exceptOrgAdmin).filter(notCouncilOnly).filter((p) => p !== "portfolio.manage"),
   },
   {
     key: "building_manager", name: "Building Manager", category: "staff", scopeLevel: "scoped",
@@ -90,13 +93,13 @@ export const SYSTEM_ROLES: SystemRole[] = [
     key: "accountant", name: "Accountant", category: "staff", scopeLevel: "org",
     description: "Read access to costs, vendors and reports.",
     permissions: ["org.read", "portfolio.read", "property.read", "unit.read", "vendor.read", "workorder.read",
-      "finance.read", "analytics.read", "document.read"],
+      "finance.read", "analytics.read", "document.read", "resident.read", "lease.read", "lease.manage"],
   },
   {
     key: "council_member", name: "Strata Council Member", category: "staff", scopeLevel: "scoped",
     description: "Governance: meetings, motions, bylaws and reports.",
     permissions: ["org.read", "property.read", "unit.read", "workorder.read", "complaint.read", "incident.read",
-      "announcement.read", "document.read", "meeting.read", "meeting.manage", "finance.read", "analytics.read",
+      "announcement.read", "document.read", "meeting.read", "meeting.manage", "meeting.vote", "finance.read", "analytics.read",
       "message.use", "ai.use"],
   },
   {

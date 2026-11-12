@@ -1,0 +1,145 @@
+# Single-host production deployment: Caddy (TLS) → app, with the worker as its own service, Postgres and Redis.
+# Read docs/deployment.md first. Everything secret comes from .env.production (never commit it):
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+# A managed Postgres is recommended over the `db` service for anything beyond a small deployment: point
+# DATABASE_URL / MIGRATION_DATABASE_URL at it and remove `db` (and its depends_on entries).
+name: propai-prod
+
+x-app-env: &app-env
+  NODE_ENV: production
+  APP_URL: https://${APP_DOMAIN:?Set APP_DOMAIN (e.g. app.example.com)}
+  DATABASE_URL: ${DATABASE_URL:-postgres://propai_app:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}@db:5432/propai}
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY (openssl rand -base64 32)}
+  APP_ENCRYPTION_KEY_ID: ${APP_ENCRYPTION_KEY_ID:-k1}
+  APP_ENCRYPTION_OLD_KEYS: ${APP_ENCRYPTION_OLD_KEYS:-}
+  REDIS_URL: redis://redis:6379
+  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1} # Caddy is the one proxy in front of the app
+  DISABLE_INPROCESS_WORKER: "true" # the worker service below does the background work
+  MAIL_PROVIDER: ${MAIL_PROVIDER:?Set MAIL_PROVIDER (smtp, resend or sendgrid)}
+  MAIL_FROM: ${MAIL_FROM:?Set MAIL_FROM}
+  SMTP_URL: ${SMTP_URL:-}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+  FILE_STORAGE: ${FILE_STORAGE:-local}
+  FILE_STORAGE_DIR: /app/.data/uploads
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_REGION: ${S3_REGION:-}
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  BILLING_PROVIDER: ${BILLING_PROVIDER:-mock}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  AI_PROVIDER: ${AI_PROVIDER:-}
+  AI_MODEL: ${AI_MODEL:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  AI_COMPAT_BASE_URL: ${AI_COMPAT_BASE_URL:-}
+  AI_COMPAT_API_KEY: ${AI_COMPAT_API_KEY:-}
+  VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+  VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@example.com}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  APP_RELEASE: ${APP_RELEASE:-}
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment: { APP_DOMAIN: "${APP_DOMAIN}" }
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      app: { condition: service_healthy }
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: propai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD (the owner role; used only by migrations and backups)}
+      POSTGRES_DB: propai
+      APP_DB_USER: propai_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U propai -d propai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # not published: only services on this network reach the database
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # release step: runs to completion before app and worker start. Never seeds demo data here.
+  migrate:
+    build: { context: ., target: migrator }
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgres://propai:${POSTGRES_PASSWORD}@db:5432/propai}
+      DATABASE_URL: ${DATABASE_URL:-postgres://propai_app:${APP_DB_PASSWORD}@db:5432/propai}
+      SEED_DEMO: "false"
+    depends_on:
+      db: { condition: service_healthy }
+
+  app:
+    build: { context: ., target: runner }
+    <<: *hardening
+    environment: *app-env
+    volumes:
+      - uploads:/app/.data/uploads
+    stop_grace_period: 30s
+    healthcheck:
+      # readiness here, so Caddy only starts once the app can reach the database
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: { context: ., target: worker }
+    <<: *hardening
+    environment:
+      <<: *app-env
+      WORKER_INTERVAL_MS: ${WORKER_INTERVAL_MS:-15000}
+      HOME: /tmp
+    volumes:
+      - uploads:/app/.data/uploads # document indexing reads uploads when FILE_STORAGE=local
+    stop_grace_period: 40s # above WORKER_SHUTDOWN_GRACE_MS (25 s): the tick in flight finishes
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  uploads:
+  caddydata:
+  caddyconfig:

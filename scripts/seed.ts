@@ -8,6 +8,7 @@ import { EXTRA_STAFF_DOMAIN, seedFacility, seedFacilityTenant } from "./seed-fac
 import { seedAi } from "./seed-ai";
 import { seedKnowledge } from "./seed-knowledge";
 import { seedAutomation } from "./seed-automation";
+import { seedGovernance } from "./seed-governance";
 import { seedBilling } from "./seed-billing";
 import { snapshotUsage } from "../src/server/billing/service";
 
@@ -292,6 +293,8 @@ async function main() {
   console.log(`✓ billing: ${billing.subscriptions} subscriptions with invoices (development provider), ${billing.apiKeys} demo API key`);
   const kb = await seedKnowledge();
   console.log(`✓ knowledge base: ${kb.entries} entries, ${kb.sources} sources indexed into ${kb.passages} passages`);
+  const gov = await seedGovernance();
+  console.log(`✓ governance and leasing: ${gov.meetings} meetings with ${gov.motions} motions, ${gov.leases} leases with ${gov.charges} rent charges`);
   const auto = await seedAutomation();
   console.log(`✓ automation: ${auto.rules} rules, ${auto.runs} runs`);
   const ai = await seedAi();

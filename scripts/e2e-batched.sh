@@ -36,4 +36,5 @@ run "security" "sso,account/confirm,settings/security,settings/privacy,settings/
 run "ux a11y" "dashboard,notifications,tasks,maintenance,register,login"
 run "workflow-ux" "maintenance,settings/roles,settings/security,settings/audit,automations,assistant,tasks,dashboard"
 run "pwa mobile" "maintenance,notifications,packages,dashboard,desk,visitors,tasks,residents,vendors,incidents"
+run "marketing governance" "login,orgs,dashboard,meetings,leases,settings/audit"
 exit $status

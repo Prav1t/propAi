@@ -1,5 +1,5 @@
 import { getOrgContext, sp } from "@/server/org-context";
-import { getPreferences, listNotifications } from "@/server/modules/notifications/service";
+import { getPreferences, listNotifications, unreadCount } from "@/server/modules/notifications/service";
 import { EmptyState, PageHeader, Panel, PanelHeader } from "@/components/ui/primitives";
 import { LinkTabs } from "@/components/ui/tabs";
 import { NotificationList } from "@/components/ops/notification-list";
@@ -18,6 +18,7 @@ export default async function NotificationsPage({ params, searchParams }: PagePr
   const tab = sp(q.tab) === "settings" ? "settings" : sp(q.tab) === "unread" ? "unread" : "all";
   const base = `/o/${orgSlug}/notifications`;
   const items = tab === "settings" ? [] : await listNotifications(ctx, { unreadOnly: tab === "unread", limit: 100 });
+  const unreadTotal = tab === "settings" ? 0 : await unreadCount(ctx);
   const prefs = tab === "settings" ? await getPreferences(ctx) : [];
   const devices = tab === "settings" ? await myPushDevices(ctx) : [];
   const pushKey = tab === "settings" && (await pushAvailable(principal.orgId)) ? vapidPublicKey() : null;
@@ -36,7 +37,7 @@ export default async function NotificationsPage({ params, searchParams }: PagePr
             <PreferencesForm action={savePreferencesAction.bind(null, orgSlug)} prefs={prefs} push={devices.length > 0} />
           </>
         ) : items.length === 0 ? <EmptyState title={tab === "unread" ? "You're all caught up" : "No notifications yet"} /> : (
-          <NotificationList markAll={markAllReadAction.bind(null, orgSlug)} items={items.map((n) => ({
+          <NotificationList markAll={markAllReadAction.bind(null, orgSlug)} unreadTotal={unreadTotal} items={items.map((n) => ({
             id: n.id, title: n.title, body: n.body, readAt: !!n.readAt, createdAt: n.createdAt.toISOString(),
             when: relative(n.createdAt), whenTitle: fmtDateTime(n.createdAt, principal.orgTimezone),
             open: openNotificationAction.bind(null, orgSlug, n.id, n.href),

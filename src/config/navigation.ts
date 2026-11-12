@@ -39,6 +39,7 @@ export const NAV: NavSection[] = [
       { label: "Announcements", href: (s) => `/o/${s}/announcements`, anyOf: ["announcement.read", "announcement.manage"], icon: "megaphone", badgeKey: "announcements" },
       { label: "Messages", href: (s) => `/o/${s}/messages`, anyOf: ["message.manage"], residentsAlso: ["message.use"], icon: "message", badgeKey: "messages" },
       { label: "Documents", href: (s) => `/o/${s}/documents`, anyOf: ["document.read", "document.manage"], icon: "file" },
+      { label: "Meetings", href: (s) => `/o/${s}/meetings`, anyOf: ["meeting.read", "meeting.manage"], icon: "users" },
       { label: "Knowledge base", href: (s) => `/o/${s}/knowledge`, anyOf: ["knowledge.manage"], icon: "book" },
     ],
   },
@@ -47,6 +48,7 @@ export const NAV: NavSection[] = [
     items: [
       { label: "Properties", href: (s) => `/o/${s}/properties`, anyOf: ["property.read"], icon: "building" },
       { label: "Units", href: (s) => `/o/${s}/units`, anyOf: ["unit.read", "unit.read.own"], icon: "door" },
+      { label: "Leases", href: (s) => `/o/${s}/leases`, anyOf: ["lease.read", "lease.manage"], icon: "card" },
       { label: "Portfolios", href: (s) => `/o/${s}/portfolios`, anyOf: ["portfolio.read"], icon: "folder" },
     ],
   },

@@ -7,6 +7,7 @@ import {
 } from "../../db/schema";
 import { authorize, can, ForbiddenError, NotFoundError, scopeFilter } from "../../authz/authorize";
 import { auditAs, blankToNull, tenantTx, ValidationError, ConflictError, type TenantCtx } from "../context";
+import { residentHasLeases } from "../leases/service";
 import { matches, pageArgs, scopeCondition, toPage, toPrefixQuery, type Page } from "../scope";
 import { generateToken, hashToken } from "../../auth/crypto";
 import { sendEmail } from "../../mail/mailer";
@@ -230,6 +231,8 @@ export async function deleteResident(ctx: TenantCtx, id: string) {
   await tenantTx(ctx, async (tx) => {
     await assertCanManageResident(ctx, tx, id);
     const [before] = await tx.select().from(residents).where(eq(residents.id, id));
+    // lease and rent records are kept: a tenant named on a lease can be erased (anonymised) under Privacy, not deleted
+    if (await residentHasLeases(tx, p.orgId, id)) throw new ConflictError("This person is named on a lease, and lease and rent records are kept. To remove their personal details, use Organization → Privacy.");
     if (before.userId) {
       // remove their resident access in this org too — only resident memberships: the same person may also be staff
       // or an admin, and managing residents must not reach those (finding F-02)

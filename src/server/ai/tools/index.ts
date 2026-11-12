@@ -11,6 +11,7 @@ import { calendarRange, opsKpis, searchComplaints, searchIncidents, searchInspec
 import { assetHistory } from "./facility";
 import { retrievePolicyTool, searchDocumentsTool, searchKnowledgeTool } from "./knowledge";
 import { comparePeriods, dailyBriefTool, propertyHealthTool, queryMetrics } from "./analytics";
+import { searchLeases, searchMeetings } from "./governance";
 import { assignWorkOrderAction, commentOnWorkOrderAction, createWorkOrderAction, updateWorkOrderStatusAction } from "./actions-maintenance";
 import { createIncidentAction, createTaskAction, scheduleInspectionAction } from "./actions-ops";
 import { cancelBookingAction, createBookingAction, logPackageAction, messageResidentAction, registerVisitorAction, sendAnnouncementAction } from "./actions-community";
@@ -22,6 +23,7 @@ export const ALL_TOOLS: ToolDef[] = [
   assetHistory, whosOnShift, shiftSummary, opsKpis, calendarRange, recentAnnouncements,
   searchKnowledgeTool, retrievePolicyTool, searchDocumentsTool,
   queryMetrics, comparePeriods, propertyHealthTool, dailyBriefTool,
+  searchMeetings, searchLeases,
   createWorkOrderAction, assignWorkOrderAction, updateWorkOrderStatusAction, commentOnWorkOrderAction, createTaskAction, scheduleInspectionAction,
   createBookingAction, cancelBookingAction, logPackageAction, registerVisitorAction, createIncidentAction, sendAnnouncementAction, messageResidentAction,
 ] as ToolDef[];

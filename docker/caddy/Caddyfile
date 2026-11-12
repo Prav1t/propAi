@@ -1,0 +1,20 @@
+# TLS termination and reverse proxy for the single-host deployment (docker-compose.prod.yml).
+# Caddy obtains and renews the certificate for {$APP_DOMAIN} automatically; ports 80 and 443 must reach this host.
+{$APP_DOMAIN} {
+	encode zstd gzip
+	# metrics are scraped from inside the network, never from the internet
+	@metrics path /api/metrics
+	respond @metrics 404
+	reverse_proxy app:3000 {
+		# take an instance out of rotation when it is not ready (database unreachable)
+		health_uri /api/health
+		health_interval 10s
+		health_timeout 5s
+		# assistant answers stream; don't buffer them
+		flush_interval -1
+	}
+	log {
+		output stdout
+		format json
+	}
+}

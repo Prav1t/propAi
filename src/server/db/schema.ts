@@ -639,6 +639,8 @@ export const workOrders = pgTable(
     index("work_orders_assignee_idx").on(t.assignedMembershipId),
     index("work_orders_submitter_idx").on(t.submittedByUserId),
     index("work_orders_unit_idx").on(t.unitId),
+    // open work is a small part of a long history, and nearly every dashboard, list and health query asks only for it
+    index("work_orders_open_idx").on(t.orgId, t.propertyId, t.createdAt).where(sql`${t.status} in ('new','acknowledged','assigned','scheduled','in_progress','awaiting_vendor','awaiting_resident')`),
     uniqueIndex("work_orders_client_ref_uq").on(t.orgId, t.submittedByUserId, t.clientRef).where(sql`${t.clientRef} is not null`),
     check("wo_status_ck", sql`${t.status} in ('new','acknowledged','assigned','scheduled','in_progress','awaiting_vendor','awaiting_resident','completed','closed','cancelled')`),
     check("wo_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
@@ -698,7 +700,7 @@ export const tasks = pgTable(
     check("tasks_status_ck", sql`${t.status} in ('open','in_progress','blocked','done','cancelled')`),
     check("tasks_priority_ck", sql`${t.priority} in ('low','normal','high','urgent')`),
     check("tasks_recurrence_ck", sql`${t.recurrence} in ('none','daily','weekly','monthly')`),
-    check("tasks_source_ck", sql`${t.source} in ('manual','work_order','inspection','incident','complaint','recurring','system','automation')`),
+    check("tasks_source_ck", sql`${t.source} in ('manual','work_order','inspection','incident','complaint','recurring','system','automation','meeting')`),
   ],
 );
 
@@ -2424,5 +2426,172 @@ export const pushSubscriptions = pgTable(
     uniqueIndex("push_subscriptions_endpoint_uq").on(t.orgId, t.endpoint),
     index("push_subscriptions_user_idx").on(t.orgId, t.userId),
     check("push_subscriptions_endpoint_ck", sql`${t.endpoint} like 'https://%' or ${t.endpoint} like 'http://127.0.0.1:%'`),
+  ],
+);
+
+/* ───────────────────────── Operations (Iteration 13) ───────────────────────── */
+
+// one row per worker process: when it last finished a tick. Not tenant data (no org, no personal information);
+// read by /api/metrics and the readiness check so a stalled worker is visible from any instance.
+export const workerHeartbeats = pgTable("worker_heartbeats", {
+  workerId: text("worker_id").primaryKey(), // hostname:pid
+  kind: text("kind").notNull(), // "in-process" | "standalone"
+  startedAt: ts("started_at").notNull(),
+  lastTickAt: ts("last_tick_at").notNull(),
+  lastTickMs: integer("last_tick_ms").notNull().default(0),
+  lastError: text("last_error"),
+});
+
+/* ───────────────────────── Governance: meetings, motions, votes (Iteration 13, RLS) ───────────────────────── */
+
+export const MEETING_KINDS = ["council", "agm", "sgm", "committee"] as const;
+export const MEETING_STATUSES = ["scheduled", "held", "cancelled"] as const;
+export const MOTION_THRESHOLDS = ["majority", "three_quarters", "unanimous"] as const;
+export const MOTION_STATUSES = ["open", "carried", "defeated", "withdrawn", "tabled"] as const;
+export const VOTE_CHOICES = ["for", "against", "abstain"] as const;
+
+export const meetings = pgTable(
+  "meetings",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull().default("council"),
+    title: text("title").notNull(),
+    scheduledAt: ts("scheduled_at").notNull(),
+    location: text("location"),
+    status: text("status").notNull().default("scheduled"),
+    attendees: text("attendees"), // as recorded in the minutes
+    quorumMet: boolean("quorum_met"),
+    minutes: text("minutes"), // general notes; each agenda item has its own
+    minutesApprovedAt: ts("minutes_approved_at"), // once approved, the record no longer changes
+    minutesApprovedByUserId: uuid("minutes_approved_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("meetings_org_property_idx").on(t.orgId, t.propertyId, t.scheduledAt),
+    check("meetings_kind_ck", sql`${t.kind} in ('council','agm','sgm','committee')`),
+    check("meetings_status_ck", sql`${t.status} in ('scheduled','held','cancelled')`),
+  ],
+);
+
+export const meetingAgendaItems = pgTable(
+  "meeting_agenda_items",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    meetingId: uuid("meeting_id").notNull().references(() => meetings.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    title: text("title").notNull(),
+    notes: text("notes"), // background circulated before the meeting
+    minutes: text("minutes"), // what was discussed and decided
+    createdAt: createdAt(),
+  },
+  (t) => [index("meeting_agenda_meeting_idx").on(t.meetingId, t.position)],
+);
+
+export const meetingMotions = pgTable(
+  "meeting_motions",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    meetingId: uuid("meeting_id").notNull().references(() => meetings.id, { onDelete: "cascade" }),
+    number: integer("number").notNull(),
+    text: text("text").notNull(),
+    movedBy: text("moved_by"),
+    secondedBy: text("seconded_by"),
+    threshold: text("threshold").notNull().default("majority"),
+    status: text("status").notNull().default("open"),
+    votesFor: integer("votes_for").notNull().default(0),
+    votesAgainst: integer("votes_against").notNull().default(0),
+    votesAbstain: integer("votes_abstain").notNull().default(0),
+    decidedAt: ts("decided_at"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("meeting_motions_number_uq").on(t.meetingId, t.number),
+    index("meeting_motions_open_idx").on(t.orgId, t.status),
+    check("meeting_motions_threshold_ck", sql`${t.threshold} in ('majority','three_quarters','unanimous')`),
+    check("meeting_motions_status_ck", sql`${t.status} in ('open','carried','defeated','withdrawn','tabled')`),
+    check("meeting_motions_counts_ck", sql`${t.votesFor} >= 0 and ${t.votesAgainst} >= 0 and ${t.votesAbstain} >= 0`),
+  ],
+);
+
+// one vote per council member per motion; it can be changed until the motion is decided
+export const meetingVotes = pgTable(
+  "meeting_votes",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    motionId: uuid("motion_id").notNull().references(() => meetingMotions.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    choice: text("choice").notNull(),
+    castAt: ts("cast_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("meeting_votes_member_uq").on(t.motionId, t.membershipId),
+    check("meeting_votes_choice_ck", sql`${t.choice} in ('for','against','abstain')`),
+  ],
+);
+
+/* ───────────────────────── Leasing: leases and rent (Iteration 13, RLS) ───────────────────────── */
+
+export const LEASE_STATUSES = ["active", "notice", "ended"] as const;
+
+export const leases = pgTable(
+  "leases",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id").notNull().references(() => units.id, { onDelete: "cascade" }),
+    residentId: uuid("resident_id").notNull().references(() => residents.id, { onDelete: "restrict" }), // the tenant named on the lease
+    startsOn: date("starts_on").notNull(),
+    endsOn: date("ends_on"), // null = month to month
+    rentCents: integer("rent_cents").notNull(),
+    depositCents: integer("deposit_cents").notNull().default(0),
+    dueDay: integer("due_day").notNull().default(1),
+    status: text("status").notNull().default("active"),
+    noticeGivenOn: date("notice_given_on"),
+    moveOutOn: date("move_out_on"),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("leases_org_property_idx").on(t.orgId, t.propertyId, t.status),
+    index("leases_resident_idx").on(t.residentId),
+    // a unit has one lease in force at a time
+    uniqueIndex("leases_unit_in_force_uq").on(t.unitId).where(sql`${t.status} in ('active','notice')`),
+    check("leases_status_ck", sql`${t.status} in ('active','notice','ended')`),
+    check("leases_money_ck", sql`${t.rentCents} > 0 and ${t.depositCents} >= 0`),
+    check("leases_due_day_ck", sql`${t.dueDay} between 1 and 28`),
+    check("leases_dates_ck", sql`${t.endsOn} is null or ${t.endsOn} >= ${t.startsOn}`),
+  ],
+);
+
+// what is owed for one month of one lease, and what has been recorded as received (no payment processing)
+export const rentCharges = pgTable(
+  "rent_charges",
+  {
+    id: id(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    leaseId: uuid("lease_id").notNull().references(() => leases.id, { onDelete: "cascade" }),
+    period: date("period").notNull(), // first day of the month
+    amountCents: integer("amount_cents").notNull(),
+    dueOn: date("due_on").notNull(),
+    paidCents: integer("paid_cents").notNull().default(0),
+    paidOn: date("paid_on"), // when it was paid in full
+    note: text("note"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("rent_charges_period_uq").on(t.leaseId, t.period),
+    index("rent_charges_unpaid_idx").on(t.orgId, t.dueOn).where(sql`${t.paidCents} < ${t.amountCents}`),
+    check("rent_charges_money_ck", sql`${t.amountCents} > 0 and ${t.paidCents} >= 0 and ${t.paidCents} <= ${t.amountCents}`),
   ],
 );

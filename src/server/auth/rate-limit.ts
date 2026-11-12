@@ -5,6 +5,8 @@ import Redis from "ioredis";
 export interface RateLimiter {
   hit(key: string, limit: number, windowMs: number): Promise<{ allowed: boolean; remaining: number; resetAt: number }>;
   reset(key: string): Promise<void>;
+  // readiness: true when the shared store answers; absent for per-process limiters
+  ping?(): Promise<boolean>;
 }
 
 export class MemoryRateLimiter implements RateLimiter {
@@ -84,6 +86,10 @@ export class RedisRateLimiter implements RateLimiter {
     }
   }
 
+  async ping() {
+    try { await whenReady(this.redis, 500); return (await this.redis.ping()) === "PONG"; } catch { return false; }
+  }
+
   async reset(key: string) {
     // every window size this key is used with lives under the same prefix; the scan is bounded to that key
     try {
@@ -105,6 +111,7 @@ class ScaledLimiter implements RateLimiter {
   reset(key: string) {
     return this.inner.reset(key);
   }
+  ping = this.inner.ping ? () => this.inner.ping!() : undefined;
 }
 
 const relaxed = () => process.env.RATE_LIMITS === "relaxed" && process.env.NODE_ENV !== "production";

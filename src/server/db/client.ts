@@ -19,6 +19,12 @@ export function db(): Db {
   return g.__db;
 }
 
+// the pool itself, for the few things that need one dedicated connection (the worker's turn-taking lock)
+export function pool(): Pool {
+  db();
+  return g.__pgPool!;
+}
+
 export async function closeDb() {
   await g.__pgPool?.end();
   g.__pgPool = undefined;

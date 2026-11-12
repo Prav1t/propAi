@@ -180,6 +180,17 @@ export function planDemo(raw: string, available: ReadonlySet<string>, h: ChatHin
     return tools([{ name: "search_vendors", input: { ...(category ? { category: category === "doors_locks" ? "locksmith" : category === "pest" ? "pest_control" : category } : {}), ...loc } }]);
   }
 
+  // governance and leasing (Iteration 13)
+  if (/\b(motions?|council meetings?|general meetings?|agm|next meeting|meeting minutes|meetings (scheduled|coming))\b/.test(t) && !/\b(book|reserve|meeting room)\b/.test(t)) {
+    if (!has("search_meetings")) return { kind: "reply", text: refusal("meetings and motions") };
+    return tools([{ name: "search_meetings", input: { view: /\bmotions?\b/.test(t) ? "open_motions" : /\b(last|previous|past|held|minutes)\b/.test(t) ? "past" : "upcoming", ...loc } }]);
+  }
+  if (/\b(leases?|rent roll|arrears|tenants? (are |is )?(behind|late)|(overdue|unpaid|late|outstanding) rent|rent (is |that is |that's )?(overdue|late|owing|unpaid|outstanding)|behind on (their |the )?rent)\b/.test(t)) {
+    if (!has("search_leases")) return { kind: "reply", text: refusal("leases and rent") };
+    const view = /\b(overdue|behind|late|arrears|owing|unpaid|outstanding)\b/.test(t) ? "overdue" : /\b(end|ends|ending|expir\w*|renew\w*|notice|moving out|move.?out)\b/.test(t) ? "ending" : /\bended\b/.test(t) ? "ended" : "current";
+    return tools([{ name: "search_leases", input: { view, ...loc } }]);
+  }
+
   if (/\b(on.?site|in the building)\b/.test(t) && !/\b(staff|shift|working|on duty)\b/.test(t)) {
     return tools([{ name: "search_visitors", input: { view: "on_site", ...loc } }]);
   }

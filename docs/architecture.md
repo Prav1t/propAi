@@ -328,6 +328,34 @@ service (one transaction)                 worker (system context)
   - changes need a recent sign-in.
 - **Signed-in members** (`server/modules/members/sessions.ts`) lists active sessions with their device, sign-in method and last activity. Signing a member out ends all their sessions, except for people who also belong to other organizations: then only the sessions started through this organization's SSO end.
 
+## 10b. Operations: configuration, health, metrics, the worker (Iteration 13)
+
+- **Start-up check** (`server/ops/config-check.ts`, `startup.ts`): in production, `instrumentation.ts` and the standalone worker refuse to start when the configuration is unsafe (non-HTTPS address, development switches, console mail, the app using the owner's database user) and log warnings for the rest. `npm run config:check` prints the report.
+- **Probes** (`server/ops/health.ts`):
+  - `/api/health/live` touches nothing;
+  - `/api/health` checks the database (503 when it fails), the schema, the database role's privileges, storage and Redis (a failure there is `degraded`, still 200).
+- **Metrics** (`server/ops/metrics.ts`, `/api/metrics`): Prometheus text behind a bearer token. Counters and histograms live in the process; queue depths, the oldest waiting item and the worker's last tick are read from the database at scrape time. Totals only.
+- **Error tracking** (`server/ops/error-tracking.ts`): an `ErrorTracker` interface with a Sentry-envelope implementation, fed by `onRequestError` and worker failures. No user, body or concrete URL is sent.
+- **The worker** (`server/worker.ts`):
+  - **Turn-taking:** a tick takes a session-level PostgreSQL advisory lock on one dedicated connection. Any number of workers (in-process or standalone) can run; one works at a time, and a worker that dies gives the turn up when its connection closes.
+  - **Heartbeat:** each tick that ran writes `worker_heartbeats`.
+  - **Shutdown:** on `SIGTERM` the worker stops taking turns and waits for the one in flight.
+- **CSP reports:** the policy carries `report-uri /api/csp-report`; violations are logged as `csp.violation` (rate-limited, without query strings).
+- **Scripts:** `db:backup`, `db:restore-drill` (restores into a scratch database and verifies counts, RLS, role privileges and audit chains), `load:test` and `scripts/load-data.ts`.
+
+## 10c. Governance and leasing (Iteration 13)
+
+- **Meetings** (`server/modules/meetings/service.ts`): meetings belong to a property; `meeting.read` / `meeting.manage` / `meeting.vote` are checked against that property.
+  - **Votes:** one per council member per motion, changeable until the result is recorded. The audit log records that someone voted, not how.
+  - **Results:** `motionOutcome` (`lib/governance.ts`) applies the motion's threshold to the tally (votes cast in the app, or a count entered by hand). Abstentions count toward neither side.
+  - **The closed record:** once minutes are approved, the agenda, motions and minutes can't change. Approval needs the meeting held, no open motions, and some minutes.
+  - **Action items** are ordinary tasks linked to the meeting.
+- **Leases** (`server/modules/leases/service.ts`): a lease names one tenant (someone recorded as living in the unit) and one unit; a unit has one lease in force.
+  - **Rent charges:** one per whole month in force, created when the lease is made and hourly by the worker in each organization's own calendar. Not pro-rated.
+  - **Payments** are recorded, never collected: in part or in full, never more than is owing, never dated in the future.
+  - **Records are kept:** a tenant named on a lease can't be deleted. Privacy erasure anonymises the person and removes free-text notes; the export includes their leases and rent.
+- **Assistant:** two read tools, `search_meetings` and `search_leases`, run the same services, so they follow the same property scope.
+
 ## 11. Deployment
 
 - **Dev:** `docker compose up` → Postgres (pgvector image), Mailpit, app; add `--profile s3` with `FILE_STORAGE=s3` for MinIO. Or run Postgres yourself and `npm run dev`.

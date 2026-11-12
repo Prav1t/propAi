@@ -10,11 +10,14 @@ export type NotificationItem = {
 };
 
 // "Mark all read" clears the unread markers at once; opening one marks it read on the way to its link
-export function NotificationList({ items, markAll }: { items: NotificationItem[]; markAll: () => Promise<ActionState> }) {
-  const [shown, markShown] = useOptimistic(items, (cur: NotificationItem[]) => cur.map((n) => ({ ...n, readAt: true })));
+// `unreadTotal` counts every unread notification, including older ones below the ones listed, so the count here
+// always agrees with the bell in the header and "Mark all read" is offered whenever anything is unread
+export function NotificationList({ items, unreadTotal, markAll }: { items: NotificationItem[]; unreadTotal: number; markAll: () => Promise<ActionState> }) {
+  const [state, markShown] = useOptimistic({ items, unreadTotal }, (cur) => ({ items: cur.items.map((n) => ({ ...n, readAt: true })), unreadTotal: 0 }));
+  const shown = state.items;
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const unread = shown.filter((n) => !n.readAt).length;
+  const unread = Math.max(state.unreadTotal, shown.filter((n) => !n.readAt).length);
   return (
     <>
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">

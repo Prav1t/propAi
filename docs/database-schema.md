@@ -4,7 +4,7 @@ PostgreSQL 16. UUID primary keys (`gen_random_uuid()`), `timestamptz` everywhere
 
 **Legend:** 🔒 = row-level security (tenant-owned), 🌐 = global table (no org), ⏳ = planned (not yet created).
 
-## Implemented (Iterations 1–12)
+## Implemented (Iterations 1–13)
 
 ### Identity & auth (🌐)
 
@@ -235,6 +235,25 @@ All three tables belong to one person in one organization. Their RLS policy (`ow
 - **`consents.channel`:** now also accepts `push`.
 
 Custom roles use the existing `roles` table (`org_id` set, `is_system = false`, permissions in the `permissions` array); no schema change was needed.
+
+### Governance and leasing (🔒, Iteration 13)
+
+Tenant tables with the standard `tenant_isolation` policy (migration `0030`). Which property's meetings or leases a person may open is decided in the services by property scope.
+
+| Table | Purpose / key columns |
+|---|---|
+| `meetings` | `property_id`, `kind` (council, agm, sgm, committee), `scheduled_at`, `status` (scheduled, held, cancelled), `attendees`, `quorum_met`, `minutes`, `minutes_approved_at` / `_by_user_id` (once set, the record is closed) |
+| `meeting_agenda_items` | `meeting_id`, `position`, `title`, `notes` (background), `minutes` |
+| `meeting_motions` | `meeting_id`, `number` (unique per meeting), `text`, `moved_by`, `seconded_by`, `threshold` (majority, three_quarters, unanimous), `status` (open, carried, defeated, withdrawn, tabled), the recorded tally, `decided_at` |
+| `meeting_votes` | `motion_id`, `membership_id`, `choice`; one row per member per motion (`meeting_votes_member_uq`) |
+| `leases` | `property_id`, `unit_id`, `resident_id` (the tenant), `starts_on`, `ends_on` (null: month to month), `rent_cents`, `deposit_cents`, `due_day` (1–28), `status` (active, notice, ended), `notice_given_on`, `move_out_on`. `leases_unit_in_force_uq`: one lease in force per unit |
+| `rent_charges` | `lease_id`, `period` (first of the month, unique per lease), `amount_cents`, `due_on`, `paid_cents` (never above the amount: check constraint), `paid_on` (when paid in full), `note` |
+
+**Also in Iteration 13:**
+
+- **`worker_heartbeats`** (not tenant data): one row per worker process with `last_tick_at`, read by the metrics endpoint.
+- **`work_orders_open_idx`**: a partial index on `(org_id, property_id, created_at)` for open statuses.
+- **`tasks.source`** now also accepts `meeting` (action items).
 
 ### Full-text search
 

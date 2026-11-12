@@ -15,6 +15,10 @@
     "security:secrets": "tsx scripts/secret-scan.ts",
     "security:audit": "npm audit --omit=dev --audit-level=high",
     "security:sbom": "npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json",
+    "config:check": "tsx scripts/config-check.ts",
+    "db:backup": "bash scripts/backup.sh",
+    "db:restore-drill": "tsx --conditions=react-server scripts/restore-drill.ts",
+    "load:test": "tsx scripts/load-test.ts",
     "keys:status": "tsx --conditions=react-server scripts/rotate-keys.ts",
     "keys:rotate": "tsx --conditions=react-server scripts/rotate-keys.ts --rotate",
     "push:keys": "web-push generate-vapid-keys --json",
@@ -31,6 +35,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1144.0",
     "@aws-sdk/s3-request-presigner": "^3.1144.0",
+    "@fontsource-variable/archivo": "^5.3.0",
     "@node-rs/argon2": "^2.2.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.3",

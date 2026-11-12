@@ -91,6 +91,9 @@ services:
       SMTP_URL: smtp://mailpit:1025
       MAIL_FROM: "[YOUR PRODUCT NAME] <no-reply@example.test>"
       SHOW_DEMO_ACCOUNTS: ${SHOW_DEMO_ACCOUNTS:-true}
+      # this stack is a local demo over plain http with a mail catcher: the production safety check would refuse it.
+      # Never set this on a real deployment (use docker-compose.prod.yml and docs/deployment.md).
+      ALLOW_INSECURE_PRODUCTION: "true"
       FILE_STORAGE: ${FILE_STORAGE:-local}
       FILE_STORAGE_DIR: /app/.data/uploads
       S3_BUCKET: ${S3_BUCKET:-propai-files}

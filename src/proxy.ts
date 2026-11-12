@@ -38,6 +38,7 @@ export function contentSecurityPolicy(nonce: string): string {
     "object-src 'none'",
     "manifest-src 'self'",
     "worker-src 'self'", // the service worker (offline page, push notifications)
+    "report-uri /api/csp-report", // violations are logged (csp.violation) so a broken or attacked page is noticed
     // only when the public origin is https: a production build served over http (Docker on localhost) would break
     ...(secure && (process.env.APP_URL ?? "").startsWith("https://") ? ["upgrade-insecure-requests"] : []),
   ].join("; ");

@@ -1,7 +1,7 @@
 import "server-only";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // object storage behind one interface; keys are server-generated, never user input
@@ -11,6 +11,8 @@ export interface BlobStore {
   delete(key: string): Promise<void>;
   // short-lived direct download URL when the backend supports it (S3); null = stream through the app
   signedUrl(key: string, filename: string, inline: boolean, ttlSeconds: number): Promise<string | null>;
+  // readiness: throws when the store can't be reached or written to
+  check(): Promise<void>;
 }
 
 const SAFE_KEY = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/i;
@@ -36,6 +38,10 @@ export class LocalBlobStore implements BlobStore {
   }
   async signedUrl() {
     return null;
+  }
+  async check() {
+    await mkdir(this.root, { recursive: true });
+    await access(this.root, constants.W_OK);
   }
 }
 
@@ -63,6 +69,9 @@ export class S3BlobStore implements BlobStore {
   async signedUrl(key: string, filename: string, inline: boolean, ttlSeconds: number) {
     const disposition = `${inline ? "inline" : "attachment"}; filename="${filename.replace(/[^\w.-]/g, "_")}"`;
     return getSignedUrl(this.signer, new GetObjectCommand({ Bucket: this.bucket, Key: key, ResponseContentDisposition: disposition }), { expiresIn: ttlSeconds });
+  }
+  async check() {
+    await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }), { abortSignal: AbortSignal.timeout(3000) });
   }
 }
 

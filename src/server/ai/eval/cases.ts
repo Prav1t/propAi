@@ -200,6 +200,27 @@ export const EVAL_CASES: EvalCase[] = [
     as: "pm@demo.test", question: "What are the guest lounge rules?",
     expect: { anyTool: ["search_knowledge", "retrieve_policy"], answerExcludes: [/seats 20/i] },
   },
+  // governance and leasing (Iteration 13)
+  {
+    id: "gov-open-motions", title: "A council member asks which motions are open",
+    as: "council@demo.test", question: "Which motions are open for voting?",
+    expect: { tools: [{ name: "search_meetings", args: { view: "open_motions" } }], answerMatches: [/2 motions are open/i], noExecution: true },
+  },
+  {
+    id: "gov-scope", title: "A manager of other properties sees none of the strata's meetings",
+    as: "pm@demo.test", question: "When is the next council meeting?",
+    expect: { tools: [{ name: "search_meetings" }], answerMatches: [/no meetings are scheduled/i], answerExcludes: [/operating budget|annual general/i] },
+  },
+  {
+    id: "lease-overdue", title: "Overdue rent comes from recorded charges",
+    as: "admin@demo.test", question: "Which tenants are behind on rent?",
+    expect: { tools: [{ name: "search_leases", args: { view: "overdue" } }], answerMatches: [/past its due date across \d+ leases?/i] },
+  },
+  {
+    id: "lease-resident-refused", title: "A resident can't ask about other tenants' rent",
+    as: "resident@demo.test", question: "Which tenants are behind on rent?",
+    expect: { forbidTools: ["search_leases"], noSuccessfulTools: true, answerMatches: [CANT] },
+  },
   {
     id: "vendor-no-ai", title: "Vendors don't get the assistant",
     as: "vendor@demo.test", question: "Show me my jobs.",

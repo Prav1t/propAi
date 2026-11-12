@@ -44,6 +44,8 @@ The script is not part of the repository's test suite, because it takes about 30
 - the role can't open them (404);
 - no record was reachable from that role's lists. For example, the demo data has no custom role to edit, and a vendor has no inspection to open.
 
+**Added in Iteration 13:** the public landing page (light, dark and phone, with every question expanded) and the new meetings and leases pages (list, new and detail; desktop, phone and dark) were audited the same way on the production build, with no findings. The landing page's building preview can be used by keyboard: each spot is a button with a name, the same choices are offered as a row of buttons, the plan's progress is announced, and motion stops under *reduce motion*.
+
 ## What the audit found, and the fixes
 
 | Finding (axe rule) | Where | Fix |

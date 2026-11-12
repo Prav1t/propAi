@@ -1,16 +1,33 @@
 import "dotenv/config";
-import { workerTick } from "../src/server/worker";
+import { startWorkerLoop, stopWorker, workerTick } from "../src/server/worker";
+import { closeDb } from "../src/server/db/client";
+import { assertProductionConfig } from "../src/server/ops/startup";
 
 // standalone worker for deployments that run the web app with DISABLE_INPROCESS_WORKER=true
 // `--once` runs a single tick and exits (for cron-style schedulers)
-if (process.argv.includes("--once")) {
-  workerTick().then(() => process.exit(0), () => process.exit(1));
-} else {
+async function main() {
+  assertProductionConfig();
+  if (process.argv.includes("--once")) {
+    const outcome = await workerTick();
+    await closeDb();
+    process.exit(outcome === "failed" ? 1 : 0);
+  }
   const interval = Number(process.env.WORKER_INTERVAL_MS) || 15_000;
-  console.log(`worker: ticking every ${interval}ms`);
-  const loop = async () => {
-    await workerTick();
-    setTimeout(loop, interval);
+  startWorkerLoop(interval, "standalone");
+  void workerTick();
+  // finish the tick in flight, then leave; the orchestrator's stop timeout should be above WORKER_SHUTDOWN_GRACE_MS
+  let stopping = false;
+  const stop = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", msg: "worker.stopping", signal }));
+    const result = await stopWorker(Number(process.env.WORKER_SHUTDOWN_GRACE_MS) || 25_000);
+    await closeDb().catch(() => {});
+    console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", msg: "worker.stopped", result }));
+    process.exit(result === "timed_out" ? 1 : 0);
   };
-  loop();
+  process.on("SIGTERM", () => void stop("SIGTERM"));
+  process.on("SIGINT", () => void stop("SIGINT"));
 }
+
+main().catch((e) => { console.error(e); process.exit(1); });

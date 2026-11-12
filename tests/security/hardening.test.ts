@@ -209,6 +209,8 @@ describe("audit log tamper evidence", () => {
 
   it("retention can't prune less than a year, and checkpoints anchor each chain", async () => {
     await expect(ownerPool.query("select audit_prune($1, now() - interval '30 days')", [orgId])).rejects.toThrow(/at least 365 days/);
+    // a worker that ran earlier today (another test, a dev server) may already have written today's checkpoint
+    await ownerPool.query("delete from audit_checkpoints where chain_key = $1 and created_at > now() - interval '1 day'", [orgId]);
     expect(await checkpointAuditChains()).toBeGreaterThan(0);
     const { rows } = await ownerPool.query("select c.seq, h.seq head from audit_checkpoints c join audit_chain_heads h on h.chain_key = c.chain_key where c.chain_key = $1 order by c.created_at desc limit 1", [orgId]);
     expect(rows[0].seq).toBe(rows[0].head);
